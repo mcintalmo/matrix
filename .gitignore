@@ -1,0 +1,83 @@
+# ==============================================================================
+# Rumpus Room Matrix Server — .gitignore
+# ==============================================================================
+
+# ── Secrets & Environment ──────────────────────────────────────────────────────
+.env
+.env.*
+!.env.example
+
+# Docker secrets directory (contains plaintext credential files for Docker secrets)
+# Written by init-env.sh — never commit these
+secrets/
+
+# ── Generated Config Files ────────────────────────────────────────────────────
+# These are generated from templates + secrets at deploy time.
+# Templates (*.template) are committed; generated files are not.
+element-web/config.json
+element-call/config.json
+livekit/config.yaml
+
+# Generated from synapse/homeserver.yaml.template at deploy time (contains secrets)
+synapse/homeserver.yaml
+mas/config.yaml
+telemetry/alertmanager.yml
+nginx/.htpasswd
+mas/keys/
+
+# ── Synapse Signing Key ───────────────────────────────────────────────────────
+# Managed separately — committed to local disk but backed up via GitHub Secrets.
+# NEVER commit this to a public repo.
+synapse-data/
+*.signing.key
+*.pem
+*.key
+
+# ── Terraform ─────────────────────────────────────────────────────────────────
+*.tfvars
+!infra/terraform.tfvars.example
+*.tfstate
+*.tfstate.*
+infra/.terraform/
+infra/.terraform.lock.hcl
+tfplan
+
+# ── Docker / Data ─────────────────────────────────────────────────────────────
+data/
+backups/
+mas/data/
+
+# ── Logs & Databases ──────────────────────────────────────────────────────────
+*.log
+*.log.*
+*.db
+*.db-shm
+*.db-wal
+mas/*.db
+mas/*.log
+coturn/*.log
+
+# ── Backup / Temp Files ───────────────────────────────────────────────────────
+*.bak
+*.backup
+*.temp
+*.tmp
+
+# ── macOS ─────────────────────────────────────────────────────────────────────
+.DS_Store
+.DS_Store?
+
+# ── Editor ────────────────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# ── Certificates ──────────────────────────────────────────────────────────────
+*.crt
+*.cert
+certs/
+
+# ── Archive ───────────────────────────────────────────────────────────────────
+.archive/

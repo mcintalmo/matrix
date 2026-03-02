@@ -1,0 +1,11 @@
+apiVersion: 1
+
+providers:
+  - name: 'Matrix Services'
+    orgId: 1
+    folder: 'Matrix'
+    type: file
+    disableDeletion: false
+    editable: true
+    options:
+      path: /etc/grafana/provisioning/dashboards

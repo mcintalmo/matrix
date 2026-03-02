@@ -1,0 +1,29 @@
+groups:
+  - name: matrix-alerts
+    rules:
+      - alert: SynapseDown
+        expr: up{job="synapse"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Synapse Matrix Server is DOWN"
+          description: "Synapse target {{ $labels.instance }} has been unreachable for 2 minutes."
+
+      - alert: MASDown
+        expr: up{job="mas"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Matrix Authentication Service (MAS) is DOWN"
+          description: "MAS target has been unreachable for 2 minutes. Nobody can log in."
+
+      - alert: PostgresDown
+        expr: up{job="postgres"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Database layer is DOWN"
+          description: "Postgres database has been unreachable for 2 minutes. The server is completely offline."

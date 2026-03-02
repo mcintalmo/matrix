@@ -1,0 +1,16 @@
+worker_app: synapse.app.generic_worker
+worker_name: synapse-generic-worker-1
+
+worker_listeners:
+  - type: http
+    port: 8081
+    bind_addresses: ['0.0.0.0']
+    x_forwarded: true
+    resources:
+      - names: [client, federation]
+
+  - type: http
+    port: 9092
+    bind_addresses: ['0.0.0.0']
+    resources:
+      - names: [metrics]

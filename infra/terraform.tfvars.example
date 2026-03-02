@@ -1,0 +1,26 @@
+# Example Terraform Variables File
+# Copy this to terraform.tfvars and fill in your actual values
+# DO NOT commit terraform.tfvars to git!
+
+# OCI Authentication - Get these from OCI Console
+tenancy_ocid     = "ocid1.tenancy.oc1..aaaaaaaaxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+user_ocid        = "ocid1.user.oc1..aaaaaaaaxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+compartment_ocid = "ocid1.compartment.oc1..aaaaaaaaxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+region           = "us-ashburn-1"
+fingerprint      = "xx:xx:xx:xx:xx:xx:xx:xx:xx:xx:xx:xx:xx:xx:xx:xx"
+
+# Paths
+private_key_path    = "~/.oci/oci_api_key.pem"
+ssh_public_key_path = "~/.ssh/matrix_server.pub"
+
+# Security - IMPORTANT: Change this!
+my_ip_cidr = "0.0.0.0/0" # Replace with YOUR IP: "1.2.3.4/32"
+
+# Instance Configuration (Free Tier Defaults)
+instance_shape     = "VM.Standard.A1.Flex"
+instance_ocpus     = 4
+instance_memory_gb = 24
+
+# Deployment Info
+environment  = "production"
+project_name = "matrix"

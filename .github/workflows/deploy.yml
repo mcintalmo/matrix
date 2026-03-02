@@ -1,0 +1,92 @@
+name: Deploy Matrix Server
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:  # Allow manual trigger from GitHub UI
+
+jobs:
+  deploy:
+    name: Deploy to Oracle VPS
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up SSH key
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -H ${{ secrets.SERVER_IP }} >> ~/.ssh/known_hosts
+
+      - name: Write .env file from GitHub Secrets
+        run: |
+          cat > .env <<EOF
+          SECRETS_POSTGRES_PASSWORD=${{ secrets.POSTGRES_PASSWORD }}
+          SYNAPSE_MACAROON_SECRET_KEY=${{ secrets.SYNAPSE_MACAROON_SECRET_KEY }}
+          SYNAPSE_FORM_SECRET=${{ secrets.SYNAPSE_FORM_SECRET }}
+          MAS_SYNAPSE_SHARED_SECRET=${{ secrets.MAS_SYNAPSE_SHARED_SECRET }}
+          MAS_ADMIN_TOKEN=${{ secrets.MAS_ADMIN_TOKEN }}
+          MAS_ENCRYPTION_SECRET=${{ secrets.MAS_ENCRYPTION_SECRET }}
+          DISCORD_CLIENT_ID=${{ secrets.DISCORD_CLIENT_ID }}
+          DISCORD_CLIENT_SECRET=${{ secrets.DISCORD_CLIENT_SECRET }}
+          GOOGLE_CLIENT_ID=${{ secrets.GOOGLE_CLIENT_ID }}
+          GOOGLE_CLIENT_SECRET=${{ secrets.GOOGLE_CLIENT_SECRET }}
+          GMAIL_APP_PASSWORD=${{ secrets.GMAIL_APP_PASSWORD }}
+          TURN_SHARED_SECRET=${{ secrets.TURN_SHARED_SECRET }}
+          EOF
+
+      - name: Write Synapse signing key
+        run: |
+          mkdir -p synapse-data
+          echo "${{ secrets.SYNAPSE_SIGNING_KEY }}" > synapse-data/rumpusroom.xyz.signing.key
+
+      - name: Render synapse-homeserver.yaml from template
+        run: |
+          export POSTGRES_PASSWORD="${{ secrets.POSTGRES_PASSWORD }}"
+          export SYNAPSE_MACAROON_SECRET_KEY="${{ secrets.SYNAPSE_MACAROON_SECRET_KEY }}"
+          export SYNAPSE_FORM_SECRET="${{ secrets.SYNAPSE_FORM_SECRET }}"
+          export MAS_SYNAPSE_SHARED_SECRET="${{ secrets.MAS_SYNAPSE_SHARED_SECRET }}"
+          export MAS_ADMIN_TOKEN="${{ secrets.MAS_ADMIN_TOKEN }}"
+          export TURN_SHARED_SECRET="${{ secrets.TURN_SHARED_SECRET }}"
+          envsubst < synapse/homeserver.yaml.template > synapse/homeserver.yaml
+
+      - name: Render mas/config.yaml from template
+        run: |
+          export MAS_PUBLIC_BASE="${{ secrets.MAS_PUBLIC_BASE }}"
+          export POSTGRES_PASSWORD="${{ secrets.POSTGRES_PASSWORD }}"
+          export MAS_ENCRYPTION_SECRET="${{ secrets.MAS_ENCRYPTION_SECRET }}"
+          export MAS_KEY_ID="${{ secrets.MAS_KEY_ID }}"
+          export MATRIX_DOMAIN="${{ secrets.MATRIX_DOMAIN }}"
+          export MAS_SYNAPSE_SHARED_SECRET="${{ secrets.MAS_SYNAPSE_SHARED_SECRET }}"
+          export DISCORD_CLIENT_ID="${{ secrets.DISCORD_CLIENT_ID }}"
+          export DISCORD_CLIENT_SECRET="${{ secrets.DISCORD_CLIENT_SECRET }}"
+          export GMAIL_ACCOUNT="${{ secrets.GMAIL_ACCOUNT }}"
+          export GMAIL_APP_PASSWORD="${{ secrets.GMAIL_APP_PASSWORD }}"
+          
+          # Indent the whole PEM key by 8 spaces so it aligns correctly inside the YAML doc
+          export MAS_SIGNING_KEY_INDENTED="$(echo "${{ secrets.MAS_SIGNING_KEY }}" | sed 's/^/        /')"
+          
+          envsubst < mas/config.yaml.template > mas/config.yaml
+
+      - name: Deploy files via rsync
+        run: |
+          rsync -avz --progress \
+            --exclude '.git' \
+            --exclude '*.bak' \
+            --exclude '.vscode' \
+            --exclude 'infra/' \
+            ./ ubuntu@${{ secrets.SERVER_IP }}:/opt/matrix/app/
+
+      - name: Start / update containers
+        run: |
+          ssh ubuntu@${{ secrets.SERVER_IP }} \
+            "cd /opt/matrix/app && docker compose up -d --remove-orphans"
+
+      - name: Verify deployment
+        run: |
+          sleep 10
+          ssh ubuntu@${{ secrets.SERVER_IP }} \
+            "cd /opt/matrix/app && docker compose ps"

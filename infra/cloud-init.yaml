@@ -1,0 +1,141 @@
+#cloud-config
+# Matrix Synapse Server Initialization
+# Logs: /var/log/cloud-init-output.log
+
+packages:
+  - curl
+  - vim
+  - htop
+  - iptables-persistent
+  - fail2ban
+  - certbot
+
+package_update: true
+package_upgrade: true
+
+runcmd:
+  # 1. Install Docker (Official Script for ARM)
+  - echo "=== Installing Docker ==="
+  - curl -fsSL https://get.docker.com -o /tmp/get-docker.sh
+  - sh /tmp/get-docker.sh
+  - usermod -aG docker ubuntu
+  - systemctl enable docker
+  - systemctl start docker
+
+  # 2. Install Docker Compose V2
+  - echo "=== Installing Docker Compose ==="
+  - mkdir -p /usr/local/lib/docker/cli-plugins
+  - curl -SL "https://github.com/docker/compose/releases/download/v2.24.5/docker-compose-linux-aarch64" -o /usr/local/lib/docker/cli-plugins/docker-compose
+  - chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
+  - ln -sf /usr/local/lib/docker/cli-plugins/docker-compose /usr/local/bin/docker-compose
+
+  # 3. Configure Firewall (Oracle Cloud has iptables rules by default)
+  - echo "=== Configuring Firewall ==="
+  - iptDisable system nginx (if installed by dependencies)
+  - echo "=== Disabling system nginx ==="
+  - systemctl stop nginx 2>/dev/null || true
+  - systemctl disable nginx 2>/dev/null || true
+  - systemctl mask nginx 2>/dev/null || true
+
+  # 4. Configure Firewall - Fix iptables rule ordering
+  - echo "=== Configuring Firewall ==="
+  # 5. Configure fail2ban
+  - echo "=== Configuring fail2ban ==="
+  - systemctl enable fail2ban
+  - systemctl start fail2ban
+
+  # 6. Create deployment directory
+  - mkdir -p /opt/matrix/app
+  - mkdir -p /opt/matrix/backups
+  - chown -R ubuntu:ubuntu /opt/matrix
+
+  # 7. Setup unattended upgrades for security
+  - echo "=== Configuring automatic security updates ==="
+  - apt-get install -y unattended-upgrades
+  - dpkg-reconfigure -plow unattended-upgrades
+
+  # 8. System optimization for Matrix
+  - echo "=== System optimization ==="
+  - sysctl -w net.core.somaxconn=1024
+  - sysctl -w vm.max_map_count=262144
+  - echo "net.core.somaxconn=1024" >> /etc/sysctl.conf
+  - echo "vm.max_map_count=262144" >> /etc/sysctl.conf
+
+  # 9. Create status file for monitoring
+  - echo "cloud-init completed at $(date)" > /opt/matrix/cloud-init-complete
+  
+  # 10. Final verification
+  - echo "=== Verifying Services ==="
+  - systemctl is-active docker || echo "WARNING: Docker not running"
+  - systemctl is-enabled nginx && echo "WARNING: nginx still enabled" || echo "✓ nginx disabled"
+  - iptables -L INPUT -n --line-numbers > /opt/matrix/iptables-rules.txt
+  - systemctl enable fail2ban
+  - systemctl start fail2ban
+
+  # 5. Create deployment directory
+  - mkdir -p /opt/matrix
+  - chown ubuntu:ubuntu /opt/matrix
+
+  # 6. Setup unattended upgrades for security
+  - echo "=== Configuring automatic security updates ==="
+  - apt-get install -y unattended-upgrades
+  - dpkg-reconfigure -plow unattended-upgrades
+
+  # 7. System optimization for Matrix
+  - echo "=== System optimization ==="
+  - sysctl -w net.core.somaxconn=1024
+  - sysctl -w vm.max_map_count=262144
+  - echo "net.core.somaxconn=1024" >> /etc/sysctl.conf
+  - echo "vm.max_map_count=262144" >> /etc/sysctl.conf
+
+  # 8. Create status file for monitoring
+  - echo "cloud-init completed at $(date)" > /opt/matrix/cloud-init-complete
+
+write_files:
+  - path: /etc/fail2ban/jail.local
+    content: |
+      [DEFAULT]
+      bantime = 3600
+      findtime = 600
+      maxretry = 5
+
+      [sshd]
+      enabled = true
+      port = 22
+      logpath = /var/log/auth.log
+
+  - path: /opt/matrix/README.txt
+    content: |
+      Matrix Synapse Server - Deployment Instructions
+      
+      1. Clone your repository:
+         git clone <your-repo> /opt/matrix/app
+      
+      2. Navigate to the directory:
+         cd /opt/matrix/app
+      
+      3. Create .env file with secrets
+      
+      4. Start services:
+         docker compose up -d
+      
+      5. Check logs:
+         docker compose logs -f
+      
+      For SSL setup:
+         sudo certbot --nginx -d matrix.rumpusroom.xyz
+
+final_message: |
+  ═══════════════════════════════════════════════════════════════
+  Matrix Server Initialization Complete!
+  ═══════════════════════════════════════════════════════════════
+  
+  Docker: Installed and running
+  Docker Compose: Installed
+  Firewall: Configured
+  fail2ban: Enabled
+  
+  Next: Deploy your Matrix Synapse application to /opt/matrix
+  
+  Cloud-init log: /var/log/cloud-init-output.log
+  ═══════════════════════════════════════════════════════════════

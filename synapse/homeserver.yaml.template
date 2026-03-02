@@ -1,0 +1,144 @@
+# Configuration file for Synapse.
+# Secrets are injected via environment variables from .env / GitHub Secrets.
+# See: https://element-hq.github.io/synapse/latest/usage/configuration/config_documentation.html
+
+server_name: "rumpusroom.xyz"
+pid_file: /data/homeserver.pid
+
+listeners:
+  - port: 8008
+    bind_addresses: ['0.0.0.0']
+    resources:
+    - compress: false
+      names:
+      - client
+      - federation
+    tls: false
+    type: http
+    x_forwarded: true
+
+  - port: 9093
+    bind_addresses: ['0.0.0.0']
+    tls: false
+    type: http
+    resources:
+      - names: [replication]
+
+  - port: 9092
+    bind_addresses: ['0.0.0.0']
+    tls: false
+    type: http
+    resources:
+      - names: [metrics]
+
+# ── Distributed Architecture (Workers) ────────────────────────────────────────
+send_federation: false
+federation_sender_instances:
+  - synapse-federation-sender-1
+
+instance_map:
+  main:
+    host: 'synapse'
+    port: 9093
+
+redis:
+  enabled: true
+  host: redis
+  port: 6379
+
+# ── Database ──────────────────────────────────────────────────────────────────
+database:
+  name: psycopg2
+  args:
+    user: postgres
+    password: "${SECRETS_POSTGRES_PASSWORD}"
+    database: synapse
+    host: postgres
+    port: 5432
+    cp_min: 5
+    cp_max: 10
+
+# ── Core Secrets ──────────────────────────────────────────────────────────────
+registration_shared_secret: "${SECRETS_MAS_MATRIX_SECRET}"
+macaroon_secret_key: "${SECRETS_SYNAPSE_MACAROON_SECRET_KEY}"
+form_secret: "${SECRETS_SYNAPSE_FORM_SECRET}"
+
+# ── Media & Keys ──────────────────────────────────────────────────────────────
+media_store_path: /data/media_store
+signing_key_path: "/data/rumpusroom.xyz.signing.key"
+report_stats: false
+
+# Auto-delete remote media cached from other servers after 30 days
+media_retention:
+  remote_media_lifetime: 30d
+
+trusted_key_servers:
+  - server_name: "matrix.org"
+
+# ── TURN Server (voice/video calls) ──────────────────────────────────────────
+turn_uris:
+  - "turn:matrix.rumpusroom.xyz:3478?transport=udp"
+  - "turn:matrix.rumpusroom.xyz:3478?transport=tcp"
+turn_shared_secret: "${SECRETS_TURN_SHARED_SECRET}"
+turn_allow_guests: true
+turn_user_lifetime: 86400000
+
+# ── UX Features ───────────────────────────────────────────────────────────────
+# Enable online/offline status sharing (great for small tight-knit servers)
+presence:
+  enabled: true
+
+# Enable URL Previews (with safe IP blacklist to prevent SSRF)
+url_preview_enabled: true
+url_preview_ip_range_blacklist:
+  - '127.0.0.0/8'
+  - '10.0.0.0/8'
+  - '172.16.0.0/12'
+  - '192.168.0.0/16'
+  - '100.64.0.0/10'
+  - '192.0.0.0/24'
+  - '169.254.0.0/16'
+  - '192.88.99.0/24'
+  - '198.18.0.0/15'
+  - '192.0.2.0/24'
+  - '198.51.100.0/24'
+  - '203.0.113.0/24'
+  - '224.0.0.0/4'
+  - '::1/128'
+  - 'fe80::/10'
+  - 'fc00::/7'
+  - '2001:db8::/32'
+  - 'ff00::/8'
+  - 'fec0::/10'
+
+# ── Public URL ────────────────────────────────────────────────────────────────
+public_baseurl: "https://${HOMESERVER_FQDN}"
+
+# ── Matrix Authentication Service (MSC3861) ───────────────────────────────────
+# All authentication is delegated to MAS. Local registration and password
+# auth are disabled.
+experimental_features:
+  msc3401_timezone_support: true
+  msc4108_enabled: true  # QR code login (link new device)
+  msc3861:
+    enabled: true
+    issuer: "https://${MAS_FQDN}/"
+    client_id: "01HMX5W5W5W5W5W5W5W5W5W5W5"
+    client_auth_method: "client_secret_basic"
+    client_secret: "${SECRETS_MAS_MATRIX_SECRET}"
+    admin_token: "${SECRETS_MAS_ADMIN_TOKEN}"
+    account_management_url: "https://${MAS_FQDN}/account"
+
+# ── Auth (managed by MAS) ─────────────────────────────────────────────────────
+password_config:
+  enabled: false
+
+enable_registration: false
+
+# ── Telemetry & Observability ─────────────────────────────────────────────────
+enable_metrics: true
+report_stats: true
+
+opentelemetry:
+  enabled: true
+  otlp_endpoint: "http://otel-collector:4318"

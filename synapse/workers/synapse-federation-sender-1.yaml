@@ -1,0 +1,9 @@
+worker_app: synapse.app.federation_sender
+worker_name: synapse-federation-sender-1
+
+worker_listeners:
+  - type: http
+    port: 9092
+    bind_addresses: ['0.0.0.0']
+    resources:
+      - names: [metrics]

@@ -1,0 +1,534 @@
+secrets:
+  postgres_password:
+    file: secrets/postgres_password
+
+networks:
+  # Internal network — no direct host access. Nginx is the only gateway.
+  backend:
+    driver: bridge
+    internal: true
+  # Public network — only for services that need direct host port access
+  # (nginx, coturn, livekit).
+  public:
+    driver: bridge
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "3"
+    environment:
+      POSTGRES_USER: matrix
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+      POSTGRES_MULTIPLE_DATABASES: synapse,mas
+      POSTGRES_INITDB_ARGS: --encoding=UTF8 --locale=C
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init-databases.sh:/docker-entrypoint-initdb.d/init-databases.sh:ro
+    networks:
+      - backend
+    secrets:
+      - postgres_password
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U matrix"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 4096M
+        reservations:
+          cpus: '0.25'
+          memory: 512M
+
+  synapse:
+    image: ghcr.io/element-hq/synapse:latest
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "3"
+    # No published ports — nginx proxies all external traffic.
+    environment:
+      SYNAPSE_SERVER_NAME: ${DOMAIN}
+      SYNAPSE_REPORT_STATS: ${SYNAPSE_REPORT_STATS}
+      SYNAPSE_MACAROON_SECRET_KEY: ${SECRETS_SYNAPSE_MACAROON_SECRET_KEY}
+      SYNAPSE_FORM_SECRET: ${SECRETS_SYNAPSE_FORM_SECRET}
+      MAS_SYNAPSE_SHARED_SECRET: ${SECRETS_MAS_MATRIX_SECRET}
+      MAS_ADMIN_TOKEN: ${SECRETS_MAS_ADMIN_TOKEN}
+      TURN_SHARED_SECRET: ${SECRETS_TURN_SHARED_SECRET}
+    env_file:
+      - .env
+    volumes:
+      - synapse_data:/data
+      - ./synapse/homeserver.yaml:/data/homeserver.yaml:ro
+      - ./synapse-data/rumpusroom.xyz.signing.key:/data/rumpusroom.xyz.signing.key:ro
+    networks:
+      - backend
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-fSs", "http://localhost:8008/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 2048M
+        reservations:
+          cpus: '0.25'
+          memory: 512M
+
+  redis:
+    image: redis:alpine
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "3"
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  synapse-generic-worker-1:
+    image: ghcr.io/element-hq/synapse:latest
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "3"
+    environment:
+      SYNAPSE_SERVER_NAME: ${DOMAIN}
+      SYNAPSE_REPORT_STATS: ${SYNAPSE_REPORT_STATS}
+      SYNAPSE_WORKER: synapse.app.generic_worker
+      SYNAPSE_MACAROON_SECRET_KEY: ${SECRETS_SYNAPSE_MACAROON_SECRET_KEY}
+      SYNAPSE_FORM_SECRET: ${SECRETS_SYNAPSE_FORM_SECRET}
+      MAS_SYNAPSE_SHARED_SECRET: ${SECRETS_MAS_MATRIX_SECRET}
+      MAS_ADMIN_TOKEN: ${SECRETS_MAS_ADMIN_TOKEN}
+      TURN_SHARED_SECRET: ${SECRETS_TURN_SHARED_SECRET}
+    env_file:
+      - .env
+    volumes:
+      - synapse_data:/data
+      - ./synapse/homeserver.yaml:/data/homeserver.yaml:ro
+      - ./synapse/workers/synapse-generic-worker-1.yaml:/data/workers/synapse-generic-worker-1.yaml:ro
+      - ./synapse-data/rumpusroom.xyz.signing.key:/data/rumpusroom.xyz.signing.key:ro
+    command: ["run", "--config-path=/data/homeserver.yaml", "--config-path=/data/workers/synapse-generic-worker-1.yaml"]
+    networks:
+      - backend
+    depends_on:
+      synapse:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8081/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 1024M
+        reservations:
+          cpus: '0.1'
+          memory: 256M
+
+  synapse-federation-sender-1:
+    image: ghcr.io/element-hq/synapse:latest
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "3"
+    environment:
+      SYNAPSE_SERVER_NAME: ${DOMAIN}
+      SYNAPSE_REPORT_STATS: ${SYNAPSE_REPORT_STATS}
+      SYNAPSE_WORKER: synapse.app.federation_sender
+      SYNAPSE_MACAROON_SECRET_KEY: ${SECRETS_SYNAPSE_MACAROON_SECRET_KEY}
+      SYNAPSE_FORM_SECRET: ${SECRETS_SYNAPSE_FORM_SECRET}
+      MAS_SYNAPSE_SHARED_SECRET: ${SECRETS_MAS_MATRIX_SECRET}
+      MAS_ADMIN_TOKEN: ${SECRETS_MAS_ADMIN_TOKEN}
+      TURN_SHARED_SECRET: ${SECRETS_TURN_SHARED_SECRET}
+    env_file:
+      - .env
+    volumes:
+      - synapse_data:/data
+      - ./synapse/homeserver.yaml:/data/homeserver.yaml:ro
+      - ./synapse/workers/synapse-federation-sender-1.yaml:/data/workers/synapse-federation-sender-1.yaml:ro
+      - ./synapse-data/rumpusroom.xyz.signing.key:/data/rumpusroom.xyz.signing.key:ro
+    command: ["run", "--config-path=/data/homeserver.yaml", "--config-path=/data/workers/synapse-federation-sender-1.yaml"]
+    networks:
+      - backend
+    depends_on:
+      synapse:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:9092/_synapse/metrics || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 1024M
+        reservations:
+          cpus: '0.1'
+          memory: 128M
+
+  mas:
+    image: ghcr.io/element-hq/matrix-authentication-service:latest
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "3"
+    # No published ports — nginx proxies all external traffic.
+    env_file:
+      - .env
+    volumes:
+      - ./mas/config.yaml:/config.yaml:ro
+      - mas_data:/data
+    command: ["server", "--config", "/config.yaml"]
+    networks:
+      - backend
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      disable: true
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+        reservations:
+          cpus: '0.1'
+          memory: 64M
+
+  element-web:
+    image: vectorim/element-web:latest
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "3"
+    # No published ports — nginx proxies all external traffic.
+    volumes:
+      - ./element-web/config.json:/app/config.json:ro
+    networks:
+      - backend
+    depends_on:
+      - synapse
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:80/version || exit 1"]
+      start_period: 5s
+      interval: 15s
+      timeout: 5s
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+        reservations:
+          cpus: '0.05'
+          memory: 64M
+
+  element-call:
+    image: ghcr.io/element-hq/element-call:latest
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "3"
+    # No published ports — nginx proxies all external traffic.
+    volumes:
+      - ./element-call/config.json:/app/config.json:ro
+    networks:
+      - backend
+    deploy:
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: 128M
+
+  nginx:
+    image: nginx:alpine
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "3"
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/.htpasswd:/etc/nginx/.htpasswd:ro
+      - /etc/letsencrypt:/etc/letsencrypt:ro
+      - /var/lib/letsencrypt:/var/lib/letsencrypt:ro
+      - /var/www/certbot:/var/www/certbot:ro
+    networks:
+      backend:
+        aliases:
+          # These aliases let containers reach public FQDNs without leaving Docker
+          - matrix.rumpusroom.xyz
+          - element.rumpusroom.xyz
+          - call.rumpusroom.xyz
+          - rumpusroom.xyz
+      public:
+    depends_on:
+      - synapse
+      - mas
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+        reservations:
+          cpus: '0.1'
+          memory: 64M
+
+  coturn:
+    image: coturn/coturn:latest
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "3"
+    ports:
+      - "3478:3478"
+      - "3478:3478/udp"
+      - "5349:5349"
+      - "5349:5349/udp"
+      - "49152-49172:49152-49172/udp"
+    environment:
+      TURN_SHARED_SECRET: ${SECRETS_TURN_SHARED_SECRET}
+    command: >-
+      --log-file=stdout
+      --external-ip=147.224.210.130
+      --realm=matrix.rumpusroom.xyz
+      --no-multicast-peers
+      --use-auth-secret
+      --static-auth-secret=${SECRETS_TURN_SHARED_SECRET}
+      --min-port=49152
+      --max-port=49172
+    networks:
+      - public
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+        reservations:
+          cpus: '0.05'
+          memory: 64M
+
+  livekit:
+    image: livekit/livekit-server:latest
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "3"
+    ports:
+      - "7881:7881"
+      - "50000-50200:50000-50200/udp"
+    command: --config /etc/livekit.yaml
+    volumes:
+      - ./livekit/config.yaml:/etc/livekit.yaml:ro
+    networks:
+      - backend
+      - public
+    deploy:
+      resources:
+        limits:
+          cpus: "4.0"
+          memory: 4096M
+
+  livekit-jwt:
+    image: ghcr.io/element-hq/lk-jwt-service:latest
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "3"
+    # No published ports — nginx proxies all external traffic.
+    environment:
+      - LK_JWT_PORT=8080
+      - LIVEKIT_URL=wss://livekit.rumpusroom.xyz
+      - LIVEKIT_KEY=${LIVEKIT_KEY}
+      - LIVEKIT_SECRET=${LIVEKIT_SECRET}
+    networks:
+      - backend
+    deploy:
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: 128M
+
+  # ============================================================================
+  # Telemetry Stack
+  # ============================================================================
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:latest
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "3"
+    command: ["--config=/etc/otel-collector-config.yaml"]
+    volumes:
+      - ./telemetry/otel-collector-config.yaml:/etc/otel-collector-config.yaml:ro
+    ports:
+      - "4317:4317"
+      - "4318:4318"
+    networks:
+      - backend
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          cpus: '0.1'
+          memory: 128M
+
+  prometheus:
+    image: prom/prometheus:latest
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "3"
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/usr/share/prometheus/console_libraries'
+      - '--web.console.templates=/usr/share/prometheus/consoles'
+    volumes:
+      - ./telemetry/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./telemetry/alert.rules:/etc/prometheus/alert.rules:ro
+      - prometheus_data:/prometheus
+    networks:
+      - backend
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 1024M
+        reservations:
+          cpus: '0.1'
+          memory: 256M
+
+  alertmanager:
+    image: prom/alertmanager:latest
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "3"
+    command:
+      - '--config.file=/etc/alertmanager/alertmanager.yml'
+    volumes:
+      - ./telemetry/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+    networks:
+      - backend
+    deploy:
+      resources:
+        limits:
+          cpus: '0.25'
+          memory: 128M
+        reservations:
+          cpus: '0.05'
+          memory: 32M
+
+  jaeger:
+    image: jaegertracing/all-in-one:latest
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "3"
+    environment:
+      - COLLECTOR_OTLP_ENABLED=true
+    networks:
+      - backend
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          cpus: '0.1'
+          memory: 128M
+
+  grafana:
+    image: grafana/grafana:latest
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "3"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=${SECRETS_POSTGRES_PASSWORD}
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_SERVER_ROOT_URL=https://${HOMESERVER_FQDN}/_grafana/
+      - GF_SERVER_SERVE_FROM_SUB_PATH=true
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./telemetry/grafana/provisioning:/etc/grafana/provisioning:ro
+    networks:
+      - backend
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+        reservations:
+          cpus: '0.1'
+          memory: 64M
+
+volumes:
+  synapse_data:
+    driver: local
+  postgres_data:
+    driver: local
+  mas_data:
+    driver: local
+  grafana_data:
+  prometheus_data:
