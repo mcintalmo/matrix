@@ -1,161 +1,137 @@
 # The Rumpus Room — Self-Hosted Matrix Server
 
-A production-ready Matrix homeserver stack for [rumpusroom.xyz](https://element.rumpusroom.xyz), running on Oracle Cloud Infrastructure.
+A Matrix homeserver stack for [rumpusroom.xyz](https://element.rumpusroom.xyz), running securely on Oracle Cloud Infrastructure free-tier.
+
+This repository uses Infrastructure as Code (Terraform), Docker Compose, and automated configuration templating to deploy a modular Matrix ecosystem optimized for resource efficiency.
 
 ## Architecture
 
+Our stack scales Matrix out across multiple dedicated workers while fitting entirely within an Oracle Free Tier 2-OCPU / 12GB RAM limit.
+
 ```
-Browser → Nginx (HTTPS) ─┬─ /_matrix/*   → Synapse (homeserver)
-                          ├─ /_synapse/*  → Synapse (admin)
-                          ├─ /*           → MAS (auth service)
-                          └─ element.*       → Element (web client)
-
-Synapse → PostgreSQL (database)
-MAS     → PostgreSQL (database)
-MAS     ← Discord / Google (OIDC providers)
-MAS     ← Gmail SMTP (email registration & recovery)
+Browser / App
+  │
+  ▼
+Nginx (Reverse Proxy & TLS Termination)
+  │
+  ├─ /_matrix/*         → Synapse Generic Worker (Sync & Client Traffic)
+  ├─ /_matrix/federation→ Synapse Federation Sender (Server-to-Server Traffic)
+  ├─ /_synapse/admin/*  → Synapse Main (Admin API)
+  ├─ /.well-known/*     → Nginx Static Routing
+  ├─ /*                 → Matrix Authentication Service (OIDC & Email Auth)
+  ├─ /grafana           → Grafana Telemetry Dashboard (Protected via Basic Auth)
+  └─ element.*          → Element Web (React Client)
 ```
 
-**Services:**
-
-| Container | Role |
-|---|---|
-| `nginx` | Reverse proxy, TLS termination, HTTP→HTTPS redirect |
-| `synapse` | Matrix homeserver (Element/Synapse) |
-| `mas` | Matrix Authentication Service — OIDC + email auth |
-| `element` | Element Web client |
-| `postgres` | PostgreSQL 15 — shared by Synapse and MAS |
-
-**Infrastructure:** Oracle Cloud ARM64 A1.Flex (4 OCPUs, 24 GB RAM) — Always Free tier.
+### Core Services:
+*   **Synapse (Main + Workers):** The Matrix backend. We use a Redis-backed distributed worker topology to separate heavy sync/federation traffic from the main process.
+*   **PostgreSQL 15:** The central database serving both Synapse and MAS on separate schemas.
+*   **MAS (Matrix Authentication Service):** Next-generation MSC3861 authentication delegating login to Discord, Google, and local secure passwords.
+*   **Element Web & Call:** The beautifully customized web client and voice/video conferencing drop UI.
+*   **LiveKit & Coturn:** Next-generation WebRTC SFU engine for seamless multi-user screen sharing and video calls.
+*   **OpenTelemetry & Prometheus:** Comprehensive system instrumentation and metric scraping.
 
 ---
 
-## Prerequisites
+## Installation & Deployment
 
+This repository is designed so that NO secrets are committed. All secrets are managed dynamically.
+
+### 1. Prerequisites
 - [Terraform](https://www.terraform.io/) ≥ 1.5
 - [OCI CLI](https://docs.oracle.com/en-us/iaas/Content/API/SDKDocs/cliinstall.htm) configured with your Oracle Cloud account
-- An SSH keypair at `~/.ssh/id_ed25519`
-- DNS for `matrix.rumpusroom.xyz` and `element.rumpusroom.xyz` pointing at the server IP
+- Required DNS records pointing to your server (`matrix.rumpusroom.xyz`, `element.rumpusroom.xyz`, `livekit.rumpusroom.xyz`, `turn.rumpusroom.xyz`)
 
----
-
-## Quick Start — Fresh Server Rebuild
-
+### 2. Provision Infrastructure
+We use Terraform to physically provision the Oracle Cloud VM instances and networking routes.
 
 ```bash
-# 1. Provision infrastructure
-make update-ip          # Whitelist your current IP for SSH
-make tf-apply           # Create VPS, VCN, backup bucket, IAM policies
-
-# 2. Deploy app files (after adding GitHub Secrets — see below)
-make deploy
-
-# 3. SSH in and run first-time server setup
-make ssh
-cd /opt/matrix/app && ./scripts/server-setup.sh
-
-# 4. Issue SSL certificates (first time only)
-sudo certbot certonly --webroot -w /var/www/certbot \
-  -d matrix.rumpusroom.xyz -d element.rumpusroom.xyz
-
-# 5. Start the stack
-docker compose up -d
+cd infra
+cp terraform.tfvars.example terraform.tfvars
+# Fill out your Oracle Cloud compartment and tenancy OCIDs
+terraform init
+terraform apply
 ```
 
----
-
-## Day-to-Day Operations
-
-```bash
-make deploy             # Push local changes to server
-make status             # Check all container health
-make ssh                # Open SSH session
-make docker-logs SERVICE=synapse  # Tail a service's logs
-make backup             # Trigger a manual backup now
-make update-ip          # Update your IP in the firewall (if it changed)
-```
-
-> **Full command reference:** run `make help`
-
----
-
-## Secrets & Configuration
-
-### How secrets work
-
-This project does **not** commit secrets. They are stored in **GitHub Actions Secrets** and injected at deploy time by the CI/CD workflow.
-
-| Secret Name | Description |
-|---|---|
-| `SSH_PRIVATE_KEY` | Private key for server access (`cat ~/.ssh/id_ed25519`) |
-| `SERVER_IP` | Oracle VPS public IP |
-| `POSTGRES_PASSWORD` | Shared Postgres superuser password |
-| `MAS_SYNAPSE_SHARED_SECRET` | Shared secret between MAS and Synapse |
-| `MAS_ADMIN_TOKEN` | MAS admin API token |
-| `MAS_ENCRYPTION_SECRET` | MAS encryption key |
-| `DISCORD_CLIENT_ID` | Discord OAuth2 client ID |
-| `DISCORD_CLIENT_SECRET` | Discord OAuth2 client secret |
-| `GOOGLE_CLIENT_ID` | Google OAuth2 client ID |
-| `GOOGLE_CLIENT_SECRET` | Google OAuth2 client secret |
-| `GMAIL_APP_PASSWORD` | Gmail App Password for SMTP |
-| `SYNAPSE_SIGNING_KEY` | Synapse server signing key — **never rotate this** |
-
-Add secrets at: `GitHub → Settings → Secrets and variables → Actions`
-
-### Local development
+### 3. Local Configuration
+Before deploying the Docker stack, configure your local environment and secrets. 
 
 ```bash
 cp .env.example .env
-# Fill in your values
+# Fill in your OIDC Client IDs, Domains, and Passwords in .env
+
+# Generate unique cryptographic secrets (LiveKit keys, Postgres passwords, etc)
+./scripts/init.sh
 ```
 
-The `.env` file is gitignored. The deployed `.env` on the server is written by the GitHub Actions workflow.
-
----
-
-## CI/CD
-
-Pushing to `main` triggers `.github/workflows/deploy.yml`, which:
-1. Writes `.env` from GitHub Secrets
-2. Writes the Synapse signing key from `SYNAPSE_SIGNING_KEY` secret
-3. rsyncs all files to the server
-4. Runs `docker compose up -d --remove-orphans`
-5. Prints container status
-
----
-
-## Infrastructure (Terraform)
-
-Terraform manages all Oracle Cloud resources in `infra/`:
-
-| Resource | Description |
-|---|---|
-| VCN + Subnet + Security List | Network with ports 22, 80, 443, 8448, 3478 open |
-| `VM.Standard.A1.Flex` | ARM64 compute instance (Always Free) |
-| Internet Gateway + Route Table | Public internet access |
-| `matrix-backups` OCI bucket | Object Storage for daily backups |
-| Dynamic Group + IAM Policy | Instance Principal auth for backup script |
-| Budget Alert | Alerts if spending exceeds $1/month |
+### 4. Deploy to Server
+We utilize an automated shell script to aggressively compile structural templates via `envsubst`, inject your local `.env` values, and sequentially `rsync` the production configuration to the Oracle VPS over SSH.
 
 ```bash
-make tf-plan     # Preview changes
-make tf-apply    # Apply changes
-make tf-output   # Show outputs (IP, bucket URL, etc.)
+./scripts/deploy.sh
+# Follow the interactive prompt, select option 1 (rsync)
 ```
 
-> **Note:** `terraform.tfvars` contains your OCI credentials and is gitignored. See `infra/terraform.tfvars.example`.
+### 5. Start the Stack & Initialize DB
+```bash
+# SSH into the server once deployment finishes
+ssh ubuntu@<YOUR_SERVER_IP>
+# or use the alias
+# make ssh
+
+# Spin up the infrastructure
+cd /opt/matrix/app
+docker compose up -d
+
+# Initialize the MAS / Synapse databases (Only required on first boot)
+make mas-init
+```
 
 ---
 
-## Backups
+## Making Changes
 
-Daily backups run at **10:00 UTC** via cron and ship to Oracle Object Storage (`matrix-backups` bucket). Backups older than 30 days are automatically pruned.
+Because this project relies on rendered configuration templates, **never edit the configuration on the remote server!**
 
-**What's backed up:**
-- PostgreSQL full dump (all databases)
-- Synapse media store
-- Config file snapshot
+Instead, to modify the architecture or change configurations:
+1. Edit the respective `*.template` file locally (e.g. `mas/config.yaml.template`).
+2. Run `./scripts/deploy.sh` to compile your templates and push them to the server.
+3. SSH into the server and restart the affected container:
+```bash
+ssh ubuntu@SERVER
+cd /opt/matrix/app
+docker compose restart <container_name>
+```
 
+---
+
+## Telemetry & Observability
+
+This stack features a built-in OpenTelemetry collector, Prometheus time-series database, and Grafana UI to monitor CPU utilization, request latency, and active Matrix users.
+
+**Accessing Telemetry:**
+*   Navigate to: `https://matrix.rumpusroom.xyz/grafana`
+*   The dashboard is safely locked behind Nginx Basic Authentication.
+*   **Username:** `admin`
+*   **Password:** Located in `/secrets/grafana_password` (auto-generated during `./scripts/init.sh`)
+
+**What's monitored:**
+*   **Prometheus:** Scrapes Synapse metrics (sync time, cache evictions), MAS active logins, and Docker container CPU/Memory overhead.
+*   **Alertmanager:** Listens for critical infrastructure failures (e.g. `InstanceDown`) and fires notification events.
+
+---
+
+## Features & Operations
+
+### Registration Tokens
+Account registration is highly restricted. To generate a single-use sign up token for a friend:
+```bash
+make registration-token
+# Output: Registration Token: xYzAbC123
+```
+
+### Automated Backups
+Daily backups run via cron on the server and stream directly into Oracle Object Storage.
 ```bash
 make backup                      # Trigger a manual backup now
 make restore                     # Restore from most recent backup
@@ -163,4 +139,11 @@ make restore TIME=20260301       # Restore from nearest backup before Mar 1
 make list-backups                # Show all available backups in OCI
 ```
 
----
+### Upgrading Services
+To update Synapse or MAS to the latest container releases seamlessly:
+```bash
+# On the remote server
+docker compose pull
+docker compose up -d
+docker system prune -f
+```
