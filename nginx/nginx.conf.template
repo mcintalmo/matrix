@@ -164,7 +164,8 @@ http {
         }
 
         # ── Matrix Authentication Service (MAS) Routes ────────────────────────────
-        location ~ ^/_matrix/client/(.*)/(login|logout|refresh|register) {
+        # Strict rate limiting on credential authentication endpoints (anti-brute-force)
+        location ~ ^/_matrix/client/(.*)/(login|register) {
             limit_req zone=auth_limit burst=5 nodelay;
             proxy_pass http://mas:8090;
             proxy_set_header X-Forwarded-For $remote_addr;
@@ -173,8 +174,17 @@ http {
             proxy_set_header Authorization $http_authorization;
         }
 
-        location ~ ^/(.well-known/openid-configuration|_auth|oauth2|upstream|graphql|assets)(/.*)?$ {
-            limit_req zone=auth_limit burst=10 nodelay;
+        # Static assets for MAS web UI (unthrottled)
+        location ~ ^/assets(/.*)?$ {
+            proxy_pass http://mas:8090;
+            proxy_set_header X-Forwarded-For $remote_addr;
+            proxy_set_header X-Forwarded-Proto $scheme;
+            proxy_set_header Host $host;
+        }
+
+        # Interactive UI APIs (GraphQL, OAuth, user management) with high burst headroom
+        location ~ ^/(.well-known/openid-configuration|_auth|oauth2|upstream|graphql)(/.*)?$ {
+            limit_req zone=api_burst burst=50 nodelay;
             proxy_pass http://mas:8090;
             proxy_set_header X-Forwarded-For $remote_addr;
             proxy_set_header X-Forwarded-Proto $scheme;
