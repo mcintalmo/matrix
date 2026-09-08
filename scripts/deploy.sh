@@ -47,11 +47,11 @@ deploy_from_github() {
         cd "$SERVER_DEPLOY_DIR"
         git fetch origin
         git reset --hard origin/$GITHUB_BRANCH
-        echo "✓ Updated to latest version"
+        echo "[OK] Updated to latest version"
     else
         echo "Cloning repository..."
         git clone -b "$GITHUB_BRANCH" "$GITHUB_REPO" "$SERVER_DEPLOY_DIR"
-        echo "✓ Repository cloned"
+        echo "[OK] Repository cloned"
     fi
     
     cd "$SERVER_DEPLOY_DIR"
@@ -77,46 +77,12 @@ deploy_from_local() {
     echo "Deploying from: $PROJECT_ROOT"
     echo ""
 
-    # Render synapse/homeserver.yaml from template (substitutes secrets from .env)
+    # Render configuration files using matrix-ctl
     if [ -f "$PROJECT_ROOT/.env" ]; then
-        echo "Rendering config templates..."
-        set -a && source "$PROJECT_ROOT/.env" && set +a
-        envsubst < "$PROJECT_ROOT/synapse/homeserver.yaml.template" \
-                 > "$PROJECT_ROOT/synapse/homeserver.yaml"
-        echo "  ✓ synapse/homeserver.yaml rendered"
-        
-        export MAS_SIGNING_KEY_INDENTED="$(echo "$MAS_SIGNING_KEY" | awk '{print "        " $0}')"
-        envsubst < "$PROJECT_ROOT/mas/config.yaml.template" \
-                 > "$PROJECT_ROOT/mas/config.yaml"
-        echo "  ✓ mas/config.yaml rendered"
-
-        envsubst < "$PROJECT_ROOT/element-web/config.json.template" \
-                 > "$PROJECT_ROOT/element-web/config.json"
-        echo "  ✓ element-web/config.json rendered"
-
-        envsubst < "$PROJECT_ROOT/element-call/config.json.template" \
-                 > "$PROJECT_ROOT/element-call/config.json"
-        echo "  ✓ element-call/config.json rendered"
-
-        envsubst < "$PROJECT_ROOT/livekit/config.yaml.template" \
-                 > "$PROJECT_ROOT/livekit/config.yaml"
-        echo "  ✓ livekit/config.yaml rendered"
-
-        mkdir -p "$PROJECT_ROOT/telemetry"
-        envsubst < "$PROJECT_ROOT/telemetry/alertmanager.yml.template" \
-                 > "$PROJECT_ROOT/telemetry/alertmanager.yml"
-        echo "  ✓ telemetry/alertmanager.yml rendered"
-
-        # Generate Nginx htpasswd for Grafana using the secure postgres password
-        # This requires apache2-utils/httpd-tools installed locally or on server
-        if command -v htpasswd >/dev/null 2>&1; then
-            htpasswd -b -c "$PROJECT_ROOT/nginx/.htpasswd" admin "$SECRETS_POSTGRES_PASSWORD"
-            echo "  ✓ nginx/.htpasswd generated for Grafana auth"
-        else
-            echo "⚠️  htpasswd command not found. Skipping proxy auth generation."
-        fi
+        echo "Rendering config templates via matrix-ctl..."
+        "$SCRIPT_DIR/matrix-ctl" render
     else
-        echo "⚠️  No .env file found — template config files will be sent as-is"
+        echo "[WARN] No .env file found -- template config files will be sent as-is"
     fi
 
     rsync -avz \
@@ -138,7 +104,7 @@ deploy_from_local() {
         "chmod 700 $SERVER_DEPLOY_DIR/secrets && chmod 600 $SERVER_DEPLOY_DIR/secrets/* 2>/dev/null || true"
     
     echo ""
-    echo "✓ Files deployed to ubuntu@$SERVER_IP:$SERVER_DEPLOY_DIR"
+    echo "[OK] Files deployed to ubuntu@$SERVER_IP:$SERVER_DEPLOY_DIR"
 }
 
 setup_github_deploy_key() {
@@ -167,7 +133,6 @@ setup_github_deploy_key() {
     echo "4. Update GITHUB_REPO in this script or set environment variable:"
     echo "   export GITHUB_REPO='git@github.com:yourusername/matrix.git'"
     echo ""
-    read -p "Press Enter to continue..."
 }
 
 # Main logic
@@ -175,33 +140,21 @@ case "$MODE" in
     server)
         # Running on server - deploy from GitHub
         if [ ! -f ~/.ssh/matrix-deploy-key ]; then
-            echo "WARNING: GitHub deploy key not found at ~/.ssh/matrix-deploy-key"
+            echo "[WARN] GitHub deploy key not found at ~/.ssh/matrix-deploy-key"
             setup_github_deploy_key
             exit 1
         fi
         deploy_from_github
         ;;
     local)
-        # Running locally - use rsync
-        echo "Choose deployment method:"
-        echo "1. rsync (copy files from this machine to server)"
-        echo "2. GitHub (setup instructions for server-side GitHub deployment)"
-        read -p "Enter choice (1 or 2): " choice
-        
-        case "$choice" in
-            1)
-                deploy_from_local
-                ;;
-            2)
-                setup_github_deploy_key
-                ;;
-            *)
-                echo "Invalid choice"
-                exit 1
-                ;;
-        esac
+        # Running locally - default to rsync unless --github is passed
+        if [ "${1:-}" = "--github" ]; then
+            setup_github_deploy_key
+        else
+            deploy_from_local
+        fi
         ;;
 esac
 
 echo ""
-echo "✓ Deployment complete!"
+echo "[OK] Deployment complete!"

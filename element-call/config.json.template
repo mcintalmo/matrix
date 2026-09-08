@@ -1,12 +1,19 @@
 {
   "m.homeserver": {
-    "base_url": "https://${HOMESERVER_FQDN}",
+    "base_url": "https://${MATRIX_FQDN}",
     "server_name": "${DOMAIN}"
   },
   "livekit": {
-    "livekit_service_url": "https://${LIVEKIT_FQDN}"
+    "livekit_service_url": "https://${CALL_FQDN}/jwt"
   },
   "features": {
     "feature_use_device_session_member_events": true
-  }
+  },
+  "appPrompt": true,
+  "skipLobby": true,
+  "defaultAudioEnabled": true,
+  "defaultVideoEnabled": false,
+  "e2eEnabled": true,
+  "perParticipantE2EE": true,
+  "rageshakeSubmitUrl": "https://${MATRIX_FQDN}/_matrix/client/unstable/rageshake/submit"
 }

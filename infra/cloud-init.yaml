@@ -29,16 +29,18 @@ runcmd:
   - chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
   - ln -sf /usr/local/lib/docker/cli-plugins/docker-compose /usr/local/bin/docker-compose
 
-  # 3. Configure Firewall (Oracle Cloud has iptables rules by default)
-  - echo "=== Configuring Firewall ==="
-  - iptDisable system nginx (if installed by dependencies)
+  # 3. Disable system nginx (if installed by dependencies)
   - echo "=== Disabling system nginx ==="
   - systemctl stop nginx 2>/dev/null || true
   - systemctl disable nginx 2>/dev/null || true
   - systemctl mask nginx 2>/dev/null || true
 
-  # 4. Configure Firewall - Fix iptables rule ordering
+  # 4. Configure Firewall (Oracle Cloud Ubuntu has default reject iptables rules)
   - echo "=== Configuring Firewall ==="
+  - iptables -I INPUT 6 -m state --state NEW -p tcp -m multiport --dports 80,443,8448,3478,7881 -j ACCEPT
+  - iptables -I INPUT 6 -m state --state NEW -p udp -m multiport --dports 3478,49152:49172,50000:50200 -j ACCEPT
+  - netfilter-persistent save
+
   # 5. Configure fail2ban
   - echo "=== Configuring fail2ban ==="
   - systemctl enable fail2ban
@@ -67,29 +69,8 @@ runcmd:
   # 10. Final verification
   - echo "=== Verifying Services ==="
   - systemctl is-active docker || echo "WARNING: Docker not running"
-  - systemctl is-enabled nginx && echo "WARNING: nginx still enabled" || echo "✓ nginx disabled"
+  - systemctl is-enabled nginx && echo "WARNING: nginx still enabled" || echo "[OK] nginx disabled"
   - iptables -L INPUT -n --line-numbers > /opt/matrix/iptables-rules.txt
-  - systemctl enable fail2ban
-  - systemctl start fail2ban
-
-  # 5. Create deployment directory
-  - mkdir -p /opt/matrix
-  - chown ubuntu:ubuntu /opt/matrix
-
-  # 6. Setup unattended upgrades for security
-  - echo "=== Configuring automatic security updates ==="
-  - apt-get install -y unattended-upgrades
-  - dpkg-reconfigure -plow unattended-upgrades
-
-  # 7. System optimization for Matrix
-  - echo "=== System optimization ==="
-  - sysctl -w net.core.somaxconn=1024
-  - sysctl -w vm.max_map_count=262144
-  - echo "net.core.somaxconn=1024" >> /etc/sysctl.conf
-  - echo "vm.max_map_count=262144" >> /etc/sysctl.conf
-
-  # 8. Create status file for monitoring
-  - echo "cloud-init completed at $(date)" > /opt/matrix/cloud-init-complete
 
 write_files:
   - path: /etc/fail2ban/jail.local

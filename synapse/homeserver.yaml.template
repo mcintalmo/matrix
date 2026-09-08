@@ -2,7 +2,7 @@
 # Secrets are injected via environment variables from .env / GitHub Secrets.
 # See: https://element-hq.github.io/synapse/latest/usage/configuration/config_documentation.html
 
-server_name: "rumpusroom.xyz"
+server_name: "${DOMAIN}"
 pid_file: /data/homeserver.pid
 
 listeners:
@@ -65,8 +65,8 @@ form_secret: "${SECRETS_SYNAPSE_FORM_SECRET}"
 
 # ── Media & Keys ──────────────────────────────────────────────────────────────
 media_store_path: /data/media_store
-signing_key_path: "/data/rumpusroom.xyz.signing.key"
-report_stats: false
+signing_key_path: "/data/${DOMAIN}.signing.key"
+report_stats: ${SYNAPSE_REPORT_STATS}
 
 # Auto-delete remote media cached from other servers after 30 days
 media_retention:
@@ -77,8 +77,8 @@ trusted_key_servers:
 
 # ── TURN Server (voice/video calls) ──────────────────────────────────────────
 turn_uris:
-  - "turn:matrix.rumpusroom.xyz:3478?transport=udp"
-  - "turn:matrix.rumpusroom.xyz:3478?transport=tcp"
+  - "turn:${MATRIX_FQDN}:3478?transport=udp"
+  - "turn:${MATRIX_FQDN}:3478?transport=tcp"
 turn_shared_secret: "${SECRETS_TURN_SHARED_SECRET}"
 turn_allow_guests: true
 turn_user_lifetime: 86400000
@@ -112,7 +112,7 @@ url_preview_ip_range_blacklist:
   - 'fec0::/10'
 
 # ── Public URL ────────────────────────────────────────────────────────────────
-public_baseurl: "https://${HOMESERVER_FQDN}"
+public_baseurl: "https://${MATRIX_FQDN}"
 
 # ── Matrix Authentication Service (MSC3861) ───────────────────────────────────
 # All authentication is delegated to MAS. Local registration and password
@@ -120,14 +120,16 @@ public_baseurl: "https://${HOMESERVER_FQDN}"
 experimental_features:
   msc3401_timezone_support: true
   msc4108_enabled: true  # QR code login (link new device)
+  msc3401_group_calls: true
+  msc3401_ext_signalling: true
   msc3861:
     enabled: true
-    issuer: "https://${MAS_FQDN}/"
+    issuer: "https://${MATRIX_FQDN}/"
     client_id: "01HMX5W5W5W5W5W5W5W5W5W5W5"
     client_auth_method: "client_secret_basic"
     client_secret: "${SECRETS_MAS_MATRIX_SECRET}"
     admin_token: "${SECRETS_MAS_ADMIN_TOKEN}"
-    account_management_url: "https://${MAS_FQDN}/account"
+    account_management_url: "https://${MATRIX_FQDN}/account"
 
 # ── Auth (managed by MAS) ─────────────────────────────────────────────────────
 password_config:
@@ -135,9 +137,24 @@ password_config:
 
 enable_registration: false
 
+# ── Auto-Join Rooms (Discord Emulation) ───────────────────────────────────────
+auto_join_rooms:
+  - "#WelcomeMat:${DOMAIN}" # (Optional: Update this string to your exact Alias if it differs)
+
+# ── Email Notifications ───────────────────────────────────────────────────────
+email:
+  smtp_host: "smtp.gmail.com"
+  smtp_port: 587
+  smtp_user: "${GMAIL_ACCOUNT}"
+  smtp_pass: "${GMAIL_APP_PASSWORD}"
+  require_transport_security: true
+  notif_from: "The Rumpus Room <${GMAIL_ACCOUNT}>"
+  app_name: "The Rumpus Room"
+  enable_notifs: true
+  client_base_url: "https://${ELEMENT_WEB_FQDN}"
+
 # ── Telemetry & Observability ─────────────────────────────────────────────────
 enable_metrics: true
-report_stats: true
 
 opentelemetry:
   enabled: true

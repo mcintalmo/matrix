@@ -75,52 +75,64 @@ else
 fi
 
 if [ "$BACKUP_DATE" = "NONE" ] || [ -z "$BACKUP_DATE" ]; then
-  echo "❌ No backup found$([ -n "$CUTOFF" ] && echo " at or before $CUTOFF" || echo "")."
+  echo "[ERROR] No backup found$([ -n "$CUTOFF" ] && echo " at or before $CUTOFF" || echo "")."
   echo "Available backups:"
   list_backups
   exit 1
 fi
 
-echo "Selected backup: $BACKUP_DATE"
+SELECTED="$BACKUP_DATE"
+echo "Selected backup: $SELECTED"
 
 # ── Confirm ───────────────────────────────────────────────────────────────────
-read -p "⚠️  This will STOP all containers and overwrite the database. Continue? (yes/no): " CONFIRM
-[ "$CONFIRM" != "yes" ] && { echo "Aborted."; exit 1; }
+echo ""
+read -p "[WARN] This will STOP all containers and overwrite the database. Continue? (yes/no): " CONFIRM
+if [ "$CONFIRM" != "yes" ]; then
+  echo "Aborted."
+  exit 0
+fi
 
+rm -rf "$RESTORE_DIR"
 mkdir -p "$RESTORE_DIR"
 cd "$APP_DIR"
 
 # ── Download from OCI ─────────────────────────────────────────────────────────
-echo "Downloading backup '$BACKUP_DATE' from OCI..."
+echo ""
+echo "Downloading backup from OCI..."
 $OCI os object bulk-download \
   --auth instance_principal \
   --bucket-name "$OCI_BUCKET" \
   --download-dir "$RESTORE_DIR" \
-  --object-prefix "backups/$BACKUP_DATE/"
+  --object-prefix "backups/$SELECTED/" \
+  --overwrite \
+  --output none
+# Flatten — files land in $RESTORE_DIR/backups/$SELECTED/
+mv "$RESTORE_DIR/backups/$SELECTED/"* "$RESTORE_DIR/" 2>/dev/null || true
 
 # ── Stop containers ───────────────────────────────────────────────────────────
-echo "Stopping containers..."
-docker compose stop
+echo ""
+echo "Stopping Synapse and workers..."
+docker compose stop synapse \
+  synapse-generic-worker-1 \
+  synapse-generic-worker-2 \
+  synapse-federation-sender \
+  synapse-media-repository 2>/dev/null || docker compose stop synapse
 
 # ── Restore Postgres ──────────────────────────────────────────────────────────
-echo "Restoring PostgreSQL..."
-docker compose start postgres
-sleep 5
-
-docker compose exec -T postgres psql -U postgres -c "DROP DATABASE IF EXISTS synapse;" || true
-docker compose exec -T postgres psql -U postgres -c "DROP DATABASE IF EXISTS mas;" || true
-gunzip -c "$RESTORE_DIR/backups/$BACKUP_DATE/postgres.sql.gz" | \
-  docker compose exec -T postgres psql -U postgres
-echo "  ✓ Postgres restored"
+echo "Restoring Postgres..."
+# Drop and recreate database to ensure clean state
+docker compose exec -T postgres psql -U synapse -d postgres -c \
+  "DROP DATABASE IF EXISTS synapse; CREATE DATABASE synapse OWNER synapse;"
+gunzip -c "$RESTORE_DIR/postgres.sql.gz" | \
+  docker compose exec -T postgres psql -U synapse -d synapse -q
+echo "  [OK] Postgres restored"
 
 # ── Restore media store ───────────────────────────────────────────────────────
-MEDIA_BACKUP="$RESTORE_DIR/backups/$BACKUP_DATE/media.tar.gz"
-if [ -f "$MEDIA_BACKUP" ]; then
-  echo "Restoring media store..."
-  SYNAPSE_VOL=$(docker volume inspect app_synapse_data --format '{{.Mountpoint}}')
-  sudo rm -rf "$SYNAPSE_VOL/media_store"
-  sudo tar -xzf "$MEDIA_BACKUP" -C "$SYNAPSE_VOL"
-  echo "  ✓ Media restored"
+if [ -f "$RESTORE_DIR/media.tar.gz" ]; then
+  echo "Restoring media repository..."
+  docker compose run --rm -v synapse_media:/data/media alpine \
+    sh -c "rm -rf /data/media/* && tar -xzf - -C /data/media" < "$RESTORE_DIR/media.tar.gz"
+  echo "  [OK] Media restored"
 fi
 
 # ── Restart everything ────────────────────────────────────────────────────────

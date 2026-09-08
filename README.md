@@ -1,149 +1,188 @@
-# The Rumpus Room — Self-Hosted Matrix Server
+# The Rumpus Room - Self-Hosted Matrix 2.0 Server
 
-A Matrix homeserver stack for [rumpusroom.xyz](https://element.rumpusroom.xyz), running securely on Oracle Cloud Infrastructure free-tier.
+A production Matrix homeserver stack for [rumpusroom.xyz](https://element.rumpusroom.xyz), running on Oracle Cloud Infrastructure (OCI) Always Free ARM VPS (4 OCPU / 12GB RAM).
 
-This repository uses Infrastructure as Code (Terraform), Docker Compose, and automated configuration templating to deploy a modular Matrix ecosystem optimized for resource efficiency.
+This repository utilizes declarative Infrastructure as Code (Terraform), Docker Compose, and automated configuration templating to deploy a modern Matrix 2.0 ecosystem optimized for privacy, performance, and low operational overhead.
 
-## Architecture
+---
 
-Our stack scales Matrix out across multiple dedicated workers while fitting entirely within an Oracle Free Tier 2-OCPU / 12GB RAM limit.
+## Architecture Overview
+
+Matrix 2.0 decouples client sync traffic, user identity, and real-time WebRTC media from the core homeserver process.
 
 ```
-Browser / App
-  │
-  ▼
+Incoming Web & Client Traffic
+  |
+  v
 Nginx (Reverse Proxy & TLS Termination)
-  │
-  ├─ /_matrix/*         → Synapse Generic Worker (Sync & Client Traffic)
-  ├─ /_matrix/federation→ Synapse Federation Sender (Server-to-Server Traffic)
-  ├─ /_synapse/admin/*  → Synapse Main (Admin API)
-  ├─ /.well-known/*     → Nginx Static Routing
-  ├─ /*                 → Matrix Authentication Service (OIDC & Email Auth)
-  ├─ /grafana           → Grafana Telemetry Dashboard (Protected via Basic Auth)
-  └─ element.*          → Element Web (React Client)
+  |
+  +-- /_matrix/client/v3/sync       -> Synapse Generic Worker 1 (Port 8081)
+  +-- /_matrix/client/v4/sync       -> Synapse Generic Worker 1 (Native Sliding Sync MSC4186)
+  +-- /_matrix/federation/*         -> Synapse Federation Sender (Port 8083)
+  +-- /_matrix/client/*/register    -> MAS (Matrix Authentication Service)
+  +-- /_matrix/client/*/login       -> MAS (Matrix Authentication Service)
+  +-- /_matrix/client/*/logout      -> MAS (Matrix Authentication Service)
+  +-- /_matrix/client/*/refresh     -> MAS (Matrix Authentication Service)
+  +-- /_matrix/client/versions      -> Synapse Main (Port 8008)
+  +-- /.well-known/matrix/*         -> Static Client & Server Delegation
+  +-- /rageshake                    -> FastAPI Rageshake Webhook (Bug reporting with Gmail SMTP)
+  +-- /_grafana/                    -> Grafana Observability Dashboard (Basic Auth Protected)
+  +-- element.rumpusroom.xyz        -> Element Web Client (Port 80)
+  +-- call.rumpusroom.xyz           -> Element Call MatrixRTC Client (Port 80)
+  +-- livekit.rumpusroom.xyz        -> LiveKit SFU WebRTC Signaling (Port 7880)
 ```
 
-### Core Services:
-*   **Synapse (Main + Workers):** The Matrix backend. We use a Redis-backed distributed worker topology to separate heavy sync/federation traffic from the main process.
-*   **PostgreSQL 15:** The central database serving both Synapse and MAS on separate schemas.
-*   **MAS (Matrix Authentication Service):** Next-generation MSC3861 authentication delegating login to Discord, Google, and local secure passwords.
-*   **Element Web & Call:** The beautifully customized web client and voice/video conferencing drop UI.
-*   **LiveKit & Coturn:** Next-generation WebRTC SFU engine for seamless multi-user screen sharing and video calls.
-*   **OpenTelemetry & Prometheus:** Comprehensive system instrumentation and metric scraping.
+### Core Components
+- **Synapse (Matrix 2.0)**: Homeserver with native Sliding Sync (MSC4186) enabled, Redis-backed event bus, and dedicated sync workers.
+- **MAS (Matrix Authentication Service)**: MSC3861 auth provider delegating logins to Discord SSO, Google SSO, and local argon2id accounts. Upstream email claims are imported and auto-verified.
+- **LiveKit SFU & Coturn**: High-performance multi-party WebRTC audio/video SFU with adaptive streaming and dynacast, paired with Coturn for STUN/TURN fallback.
+- **Element Web & Element Call**: Modern web clients configured for MatrixRTC and Sliding Sync.
+- **Rageshake Webhook**: Python FastAPI microservice handling Element bug reports, log forwarding, and Gmail SMTP alerts.
+- **Telemetry**: Prometheus, Alertmanager, and Grafana for monitoring resource budgets, query latencies, and sync performance.
 
 ---
 
 ## Installation & Deployment
 
-This repository is designed so that NO secrets are committed. All secrets are managed dynamically.
-
 ### 1. Prerequisites
-- [Terraform](https://www.terraform.io/) ≥ 1.5
-- [OCI CLI](https://docs.oracle.com/en-us/iaas/Content/API/SDKDocs/cliinstall.htm) configured with your Oracle Cloud account
-- Required DNS records pointing to your server (`matrix.rumpusroom.xyz`, `element.rumpusroom.xyz`, `livekit.rumpusroom.xyz`, `turn.rumpusroom.xyz`)
+- [Terraform](https://www.terraform.io/) >= 1.5
+- [OCI CLI](https://docs.oracle.com/en-us/iaas/Content/API/SDKDocs/cliinstall.htm) configured with your Oracle Cloud credentials
+- Public DNS A-records configured for all 8 domains pointing to your server IP (`147.224.210.130`):
+  - `rumpusroom.xyz`
+  - `matrix.rumpusroom.xyz`
+  - `element.rumpusroom.xyz`
+  - `chat.rumpusroom.xyz`
+  - `call.rumpusroom.xyz`
+  - `livekit.rumpusroom.xyz`
+  - `turn.rumpusroom.xyz`
+  - `auth.rumpusroom.xyz`
 
-### 2. Provision Infrastructure
-We use Terraform to physically provision the Oracle Cloud VM instances and networking routes.
-
+### 2. Provision Cloud Infrastructure
+Deploy network security lists, compute instance, and storage via Terraform:
 ```bash
 cd infra
 cp terraform.tfvars.example terraform.tfvars
-# Fill out your Oracle Cloud compartment and tenancy OCIDs
-terraform init
-terraform apply
+# Fill in your OCI tenancy and compartment OCIDs
+make tf-init
+make tf-plan
+make tf-apply
 ```
 
-### 3. Local Configuration
-Before deploying the Docker stack, configure your local environment and secrets. 
-
+### 3. Initialize Environment & Secrets
+Generate cryptographically random credentials, MAS RSA signing keys, and Docker secrets:
 ```bash
-cp .env.example .env
-# Fill in your OIDC Client IDs, Domains, and Passwords in .env
+# Generate .env with secure random secrets
+make init-env
 
-# Generate unique cryptographic secrets (LiveKit keys, Postgres passwords, etc)
-./scripts/init.sh
+# Pre-flight validation of environment variables and template schemas
+make check
 ```
 
-### 4. Deploy to Server
-We utilize an automated shell script to aggressively compile structural templates via `envsubst`, inject your local `.env` values, and sequentially `rsync` the production configuration to the Oracle VPS over SSH.
-
+### 4. Deploy Application Stack
+Deploy code, render configuration templates, and start the Docker containers:
 ```bash
-./scripts/deploy.sh
-# Follow the interactive prompt, select option 1 (rsync)
+# Deploys code to server via rsync and automatically compiles configuration templates
+make deploy
+
+# Or deploy the .env file if updated
+make deploy-env
 ```
 
-### 5. Start the Stack & Initialize DB
+### 5. First-Time Server Bootstrapping
+On the server (or via SSH targets in the Makefile):
 ```bash
-# SSH into the server once deployment finishes
-ssh ubuntu@<YOUR_SERVER_IP>
-# or use the alias
-# make ssh
+# Setup Synapse data directory and permissions
+make setup-synapse
 
-# Spin up the infrastructure
-cd /opt/matrix/app
-docker compose up -d
+# Obtain Let's Encrypt certificates for all 8 domains
+make setup-ssl
 
-# Initialize the MAS / Synapse databases (Only required on first boot)
-make mas-init
-```
-
----
-
-## Making Changes
-
-Because this project relies on rendered configuration templates, **never edit the configuration on the remote server!**
-
-Instead, to modify the architecture or change configurations:
-1. Edit the respective `*.template` file locally (e.g. `mas/config.yaml.template`).
-2. Run `./scripts/deploy.sh` to compile your templates and push them to the server.
-3. SSH into the server and restart the affected container:
-```bash
-ssh ubuntu@SERVER
-cd /opt/matrix/app
-docker compose restart <container_name>
+# Start all containers
+make docker-up
 ```
 
 ---
 
-## Telemetry & Observability
+## Operational CLI: `scripts/matrix-ctl`
 
-This stack features a built-in OpenTelemetry collector, Prometheus time-series database, and Grafana UI to monitor CPU utilization, request latency, and active Matrix users.
+The repository includes a non-interactive CLI for automated operations and CI/CD:
 
-**Accessing Telemetry:**
-*   Navigate to: `https://matrix.rumpusroom.xyz/grafana`
-*   The dashboard is safely locked behind Nginx Basic Authentication.
-*   **Username:** `admin`
-*   **Password:** Located in `/secrets/grafana_password` (auto-generated during `./scripts/init.sh`)
+```bash
+# Pre-flight verification
+./scripts/matrix-ctl check
 
-**What's monitored:**
-*   **Prometheus:** Scrapes Synapse metrics (sync time, cache evictions), MAS active logins, and Docker container CPU/Memory overhead.
-*   **Alertmanager:** Listens for critical infrastructure failures (e.g. `InstanceDown`) and fires notification events.
+# Compile configuration templates (.template -> config)
+./scripts/matrix-ctl render
+
+# Human-readable status report
+./scripts/matrix-ctl status
+
+# Machine-readable JSON status report (for automation and monitoring)
+./scripts/matrix-ctl status --json
+
+# Issue an account registration token (valid for 365 days)
+./scripts/matrix-ctl token --days 365
+
+# Create an administrator account non-interactively
+./scripts/matrix-ctl create-admin --username admin --password <SECURE_PASSWORD> --email admin@rumpusroom.xyz
+```
 
 ---
 
-## Features & Operations
+## Making Configuration Changes
 
-### Registration Tokens
-Account registration is highly restricted. To generate a single-use sign up token for a friend:
+This repository enforces declarative Infrastructure as Code. **Never modify rendered configuration files directly on the server.**
+
+1. Edit the appropriate template locally:
+   - `synapse/homeserver.yaml.template`
+   - `mas/config.yaml.template`
+   - `nginx/nginx.conf.template`
+   - `livekit/config.yaml.template`
+   - `element-web/config.json.template`
+   - `element-call/config.json.template`
+2. Test the rendering locally:
+   ```bash
+   make render
+   ```
+3. Deploy to the server:
+   ```bash
+   make deploy
+   ```
+4. Restart the affected container:
+   ```bash
+   make docker-restart SERVICE=synapse
+   ```
+
+---
+
+## Backups & Disaster Recovery
+
+Backups are executed via `scripts/backup.sh` and stream compressed Postgres dumps, media archives, and configuration snapshots into OCI Object Storage using Instance Principal authentication.
+
 ```bash
-make registration-token
-# Output: Registration Token: xYzAbC123
+# Trigger an immediate backup
+make backup
+
+# List available backups in OCI Object Storage
+make list-backups
+
+# Restore from the latest available backup
+make restore
+
+# Restore from a specific timestamp (e.g., March 1, 2026)
+make restore TIME=20260301
 ```
 
-### Automated Backups
-Daily backups run via cron on the server and stream directly into Oracle Object Storage.
-```bash
-make backup                      # Trigger a manual backup now
-make restore                     # Restore from most recent backup
-make restore TIME=20260301       # Restore from nearest backup before Mar 1
-make list-backups                # Show all available backups in OCI
-```
+---
 
-### Upgrading Services
-To update Synapse or MAS to the latest container releases seamlessly:
+## Developer Quality Standards
+
+Python components (including `rageshake-webhook/`) adhere to modern testing and typing standards:
+
 ```bash
-# On the remote server
-docker compose pull
-docker compose up -d
-docker system prune -f
+# Run unit test suite
+make test
+
+# Run code linter and formatter
+make lint
 ```

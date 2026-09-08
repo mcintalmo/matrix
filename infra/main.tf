@@ -116,6 +116,26 @@ resource "oci_core_security_list" "matrix_sl" {
       max = 49172
     }
   }
+
+  # Allow LiveKit WebRTC SFU UDP port range
+  ingress_security_rules {
+    protocol = "17" # UDP
+    source   = "0.0.0.0/0"
+    udp_options {
+      min = 50000
+      max = 50200
+    }
+  }
+
+  # Allow LiveKit WebRTC SFU TCP fallback port
+  ingress_security_rules {
+    protocol = "6" # TCP
+    source   = "0.0.0.0/0"
+    tcp_options {
+      min = 7881
+      max = 7881
+    }
+  }
 }
 
 resource "oci_core_subnet" "matrix_subnet" {

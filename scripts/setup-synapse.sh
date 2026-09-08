@@ -36,7 +36,7 @@ sudo chown -R $SYNAPSE_UID:$SYNAPSE_GID "$SYNAPSE_DATA_DIR"
 # Set permissions
 sudo chmod 750 "$SYNAPSE_DATA_DIR"
 
-echo "✓ Permissions set correctly"
+echo "[OK] Permissions set correctly"
 echo ""
 
 # Check if homeserver.yaml exists
@@ -57,26 +57,26 @@ if [ ! -f "$SYNAPSE_DATA_DIR/homeserver.yaml" ]; then
     
     # Wait for postgres to be healthy
     echo "Waiting for PostgreSQL to be ready..."
-    timeout 60 bash -c 'until docker compose exec -T postgres pg_isready -U synapse > /dev/null 2>&1; do sleep 2; done' || {
+    timeout 60 bash -c 'until docker compose exec -T postgres pg_isready -U matrix > /dev/null 2>&1; do sleep 2; done' || {
         echo "Error: PostgreSQL did not become ready in time"
         exit 1
     }
-    echo "✓ PostgreSQL is ready"
+    echo "[OK] PostgreSQL is ready"
     echo ""
     
     # Generate Synapse config
     echo "Generating Synapse configuration..."
     docker compose run --rm synapse generate
     
-    echo "✓ Configuration generated"
+    echo "[OK] Configuration generated"
     echo ""
     
     # Fix ownership again (generation might create files as root)
     echo "Fixing ownership after generation..."
     sudo chown -R $SYNAPSE_UID:$SYNAPSE_GID "$SYNAPSE_DATA_DIR"
-    echo "✓ Ownership fixed"
+    echo "[OK] Ownership fixed"
 else
-    echo "✓ Homeserver config already exists at $SYNAPSE_DATA_DIR/homeserver.yaml"
+    echo "[OK] Homeserver config already exists at $SYNAPSE_DATA_DIR/homeserver.yaml"
 fi
 
 # Verify final permissions
@@ -84,8 +84,8 @@ echo ""
 echo "Final verification:"
 ls -la "$SYNAPSE_DATA_DIR" | head -5
 echo ""
-echo "✓ Synapse data directory is ready!"
+echo "[OK] Synapse data directory is ready!"
 echo ""
 echo "Next steps:"
 echo "1. Start all services: docker compose up -d"
-echo "2. Create admin user: docker compose exec synapse register_new_matrix_user -c /data/homeserver.yaml http://localhost:8008"
+echo "2. Create admin user: ./scripts/matrix-ctl create-admin --username <USER> --password <PASS>"

@@ -1,9 +1,9 @@
 name: Deploy Matrix Server
 
 on:
-  push:
-    branches: [main]
-  workflow_dispatch:  # Allow manual trigger from GitHub UI
+  workflow_dispatch:  # Manual trigger from GitHub UI (re-enable push after setting secrets)
+  # push:
+  #   branches: [main]
 
 jobs:
   deploy:
@@ -24,57 +24,53 @@ jobs:
       - name: Write .env file from GitHub Secrets
         run: |
           cat > .env <<EOF
+          DOMAIN=${{ secrets.DOMAIN || 'rumpusroom.xyz' }}
+          MATRIX_FQDN=${{ secrets.MATRIX_FQDN || 'matrix.rumpusroom.xyz' }}
+          ELEMENT_WEB_FQDN=${{ secrets.ELEMENT_WEB_FQDN || 'element-web.rumpusroom.xyz' }}
+          ELEMENT_CALL_FQDN=${{ secrets.ELEMENT_CALL_FQDN || 'element-call.rumpusroom.xyz' }}
+          LIVEKIT_FQDN=${{ secrets.LIVEKIT_FQDN || 'livekit.rumpusroom.xyz' }}
+          CHAT_FQDN=${{ secrets.CHAT_FQDN || 'chat.rumpusroom.xyz' }}
+          CALL_FQDN=${{ secrets.CALL_FQDN || 'call.rumpusroom.xyz' }}
+          SERVER_IP=${{ secrets.SERVER_IP }}
           SECRETS_POSTGRES_PASSWORD=${{ secrets.POSTGRES_PASSWORD }}
-          SYNAPSE_MACAROON_SECRET_KEY=${{ secrets.SYNAPSE_MACAROON_SECRET_KEY }}
-          SYNAPSE_FORM_SECRET=${{ secrets.SYNAPSE_FORM_SECRET }}
-          MAS_SYNAPSE_SHARED_SECRET=${{ secrets.MAS_SYNAPSE_SHARED_SECRET }}
-          MAS_ADMIN_TOKEN=${{ secrets.MAS_ADMIN_TOKEN }}
-          MAS_ENCRYPTION_SECRET=${{ secrets.MAS_ENCRYPTION_SECRET }}
+          SECRETS_SYNAPSE_MACAROON_SECRET_KEY=${{ secrets.SYNAPSE_MACAROON_SECRET_KEY }}
+          SECRETS_SYNAPSE_FORM_SECRET=${{ secrets.SYNAPSE_FORM_SECRET }}
+          SECRETS_MAS_MATRIX_SECRET=${{ secrets.MAS_SYNAPSE_SHARED_SECRET }}
+          SECRETS_MAS_ADMIN_TOKEN=${{ secrets.MAS_ADMIN_TOKEN }}
+          SECRETS_MAS_ENCRYPTION_SECRET=${{ secrets.MAS_ENCRYPTION_SECRET }}
+          MAS_KEY_ID=${{ secrets.MAS_KEY_ID }}
+          MAS_SIGNING_KEY='${{ secrets.MAS_SIGNING_KEY }}'
           DISCORD_CLIENT_ID=${{ secrets.DISCORD_CLIENT_ID }}
           DISCORD_CLIENT_SECRET=${{ secrets.DISCORD_CLIENT_SECRET }}
           GOOGLE_CLIENT_ID=${{ secrets.GOOGLE_CLIENT_ID }}
           GOOGLE_CLIENT_SECRET=${{ secrets.GOOGLE_CLIENT_SECRET }}
+          GMAIL_ACCOUNT=${{ secrets.GMAIL_ACCOUNT }}
           GMAIL_APP_PASSWORD=${{ secrets.GMAIL_APP_PASSWORD }}
-          TURN_SHARED_SECRET=${{ secrets.TURN_SHARED_SECRET }}
+          SECRETS_TURN_SHARED_SECRET=${{ secrets.TURN_SHARED_SECRET }}
+          LIVEKIT_KEY=${{ secrets.LIVEKIT_KEY }}
+          LIVEKIT_SECRET=${{ secrets.LIVEKIT_SECRET }}
+          SYNAPSE_REPORT_STATS=no
           EOF
 
       - name: Write Synapse signing key
         run: |
           mkdir -p synapse-data
-          echo "${{ secrets.SYNAPSE_SIGNING_KEY }}" > synapse-data/rumpusroom.xyz.signing.key
+          echo "${{ secrets.SYNAPSE_SIGNING_KEY }}" > synapse-data/${{ secrets.DOMAIN || 'rumpusroom.xyz' }}.signing.key
 
-      - name: Render synapse-homeserver.yaml from template
-        run: |
-          export POSTGRES_PASSWORD="${{ secrets.POSTGRES_PASSWORD }}"
-          export SYNAPSE_MACAROON_SECRET_KEY="${{ secrets.SYNAPSE_MACAROON_SECRET_KEY }}"
-          export SYNAPSE_FORM_SECRET="${{ secrets.SYNAPSE_FORM_SECRET }}"
-          export MAS_SYNAPSE_SHARED_SECRET="${{ secrets.MAS_SYNAPSE_SHARED_SECRET }}"
-          export MAS_ADMIN_TOKEN="${{ secrets.MAS_ADMIN_TOKEN }}"
-          export TURN_SHARED_SECRET="${{ secrets.TURN_SHARED_SECRET }}"
-          envsubst < synapse/homeserver.yaml.template > synapse/homeserver.yaml
+      - name: Make scripts executable
+        run: chmod +x scripts/matrix-ctl scripts/*.sh
 
-      - name: Render mas/config.yaml from template
-        run: |
-          export MAS_PUBLIC_BASE="${{ secrets.MAS_PUBLIC_BASE }}"
-          export POSTGRES_PASSWORD="${{ secrets.POSTGRES_PASSWORD }}"
-          export MAS_ENCRYPTION_SECRET="${{ secrets.MAS_ENCRYPTION_SECRET }}"
-          export MAS_KEY_ID="${{ secrets.MAS_KEY_ID }}"
-          export MATRIX_DOMAIN="${{ secrets.MATRIX_DOMAIN }}"
-          export MAS_SYNAPSE_SHARED_SECRET="${{ secrets.MAS_SYNAPSE_SHARED_SECRET }}"
-          export DISCORD_CLIENT_ID="${{ secrets.DISCORD_CLIENT_ID }}"
-          export DISCORD_CLIENT_SECRET="${{ secrets.DISCORD_CLIENT_SECRET }}"
-          export GMAIL_ACCOUNT="${{ secrets.GMAIL_ACCOUNT }}"
-          export GMAIL_APP_PASSWORD="${{ secrets.GMAIL_APP_PASSWORD }}"
-          
-          # Indent the whole PEM key by 8 spaces so it aligns correctly inside the YAML doc
-          export MAS_SIGNING_KEY_INDENTED="$(echo "${{ secrets.MAS_SIGNING_KEY }}" | sed 's/^/        /')"
-          
-          envsubst < mas/config.yaml.template > mas/config.yaml
+      - name: Pre-flight validation
+        run: ./scripts/matrix-ctl check
+
+      - name: Render configuration templates
+        run: ./scripts/matrix-ctl render
 
       - name: Deploy files via rsync
         run: |
           rsync -avz --progress \
             --exclude '.git' \
+            --exclude '.archive' \
             --exclude '*.bak' \
             --exclude '.vscode' \
             --exclude 'infra/' \
@@ -89,4 +85,4 @@ jobs:
         run: |
           sleep 10
           ssh ubuntu@${{ secrets.SERVER_IP }} \
-            "cd /opt/matrix/app && docker compose ps"
+            "cd /opt/matrix/app && ./scripts/matrix-ctl status"

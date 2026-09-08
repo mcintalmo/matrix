@@ -9,38 +9,65 @@ echo "║  SSL Certificate Setup - Matrix & Element               ║"
 echo "╚══════════════════════════════════════════════════════════╝"
 echo ""
 
-# Configuration
-MATRIX_DOMAIN="matrix.rumpusroom.xyz"
-ELEMENT_DOMAIN="element.rumpusroom.xyz"
-EMAIL="${CERTBOT_EMAIL:-}"
+# Load environment variables if available
+if [ -f "/opt/matrix/app/.env" ]; then
+    set -a && source "/opt/matrix/app/.env" && set +a
+elif [ -f "$SCRIPT_DIR/../.env" ]; then
+    set -a && source "$SCRIPT_DIR/../.env" && set +a
+fi
+
+DOMAIN="${DOMAIN:-rumpusroom.xyz}"
+MATRIX_FQDN="${MATRIX_FQDN:-matrix.$DOMAIN}"
+ELEMENT_WEB_FQDN="${ELEMENT_WEB_FQDN:-element-web.$DOMAIN}"
+ELEMENT_CALL_FQDN="${ELEMENT_CALL_FQDN:-element-call.$DOMAIN}"
+CHAT_FQDN="${CHAT_FQDN:-chat.$DOMAIN}"
+CALL_FQDN="${CALL_FQDN:-call.$DOMAIN}"
+LIVEKIT_FQDN="${LIVEKIT_FQDN:-livekit.$DOMAIN}"
+ELEMENT_LEGACY_FQDN="element.$DOMAIN"
+EMAIL="${CERTBOT_EMAIL:-${GMAIL_ACCOUNT:-}}"
+
+DOMAINS=(
+    "$MATRIX_FQDN"
+    "$DOMAIN"
+    "$ELEMENT_WEB_FQDN"
+    "$ELEMENT_CALL_FQDN"
+    "$CHAT_FQDN"
+    "$CALL_FQDN"
+    "$LIVEKIT_FQDN"
+    "$ELEMENT_LEGACY_FQDN"
+)
 
 # Check if we're on the server
 if [ ! -f "/etc/cloud/cloud.cfg" ]; then
-    echo "❌ This script should be run ON the server"
+    echo "[ERROR] This script should be run ON the server"
     exit 1
 fi
 
 # Verify DNS is configured
 echo "=== Verifying DNS Configuration ==="
-for domain in "$MATRIX_DOMAIN" "$ELEMENT_DOMAIN"; do
-    echo -n "Checking $domain... "
-    if dig +short "$domain" | grep -q "[0-9]"; then
-        IP=$(dig +short "$domain" | head -1)
-        echo "✓ Resolves to $IP"
+RESOLVED_DOMAINS=()
+for d in "${DOMAINS[@]}"; do
+    echo -n "Checking $d... "
+    if dig +short "$d" | grep -q "[0-9]"; then
+        IP=$(dig +short "$d" | head -1)
+        echo "[OK] Resolves to $IP"
+        RESOLVED_DOMAINS+=("$d")
     else
-        echo "❌ FAILED"
-        echo "Error: DNS not configured for $domain"
-        echo "Please add an A record pointing to this server's IP"
-        exit 1
+        echo "[WARN] DNS not resolved yet for $d"
     fi
 done
 echo ""
 
+if [ ${#RESOLVED_DOMAINS[@]} -eq 0 ]; then
+    echo "[ERROR] No domains resolved to an IP address. Check DNS configuration."
+    exit 1
+fi
+
 # Check if certificates already exist
-if [ -d "/etc/letsencrypt/live/$MATRIX_DOMAIN" ]; then
-    echo "⚠️  Certificate already exists for $MATRIX_DOMAIN"
+if [ -d "/etc/letsencrypt/live/$MATRIX_FQDN" ]; then
+    echo "[INFO] Certificate already exists for $MATRIX_FQDN"
     echo ""
-    read -p "Renew/expand certificate to include both domains? (y/N): " -n 1 -r
+    read -p "Renew/expand certificate to include all domains? (y/N): " -n 1 -r
     echo
     if [[ ! $REPLY =~ ^[Yy]$ ]]; then
         echo "Aborted"
@@ -59,21 +86,27 @@ sleep 2
 
 # Verify port 80 is free
 if sudo lsof -i :80 > /dev/null 2>&1; then
-    echo "❌ Port 80 is still in use:"
+    echo "[ERROR] Port 80 is still in use:"
     sudo lsof -i :80
     exit 1
 fi
-echo "✓ Port 80 is free"
+echo "[OK] Port 80 is free"
 echo ""
 
 # Run certbot
 echo "=== Obtaining SSL Certificates ==="
-echo "This will obtain certificates for:"
-echo "  - $MATRIX_DOMAIN (Matrix backend)"
-echo "  - $ELEMENT_DOMAIN (Element frontend)"
+echo "Domains to certify:"
+for d in "${RESOLVED_DOMAINS[@]}"; do
+    echo "  - $d"
+done
 echo ""
 
 # Build certbot command
+CERTBOT_DOMAIN_FLAGS=()
+for d in "${RESOLVED_DOMAINS[@]}"; do
+    CERTBOT_DOMAIN_FLAGS+=("-d" "$d")
+done
+
 if [ -n "$EMAIL" ]; then
     EMAIL_FLAG="--email $EMAIL"
 else
@@ -82,31 +115,23 @@ fi
 
 sudo certbot $CERTBOT_ACTION \
     --standalone \
-    -d "$MATRIX_DOMAIN" \
-    -d "$ELEMENT_DOMAIN" \
+    "${CERTBOT_DOMAIN_FLAGS[@]}" \
     --non-interactive \
     --agree-tos \
     $EMAIL_FLAG || {
         echo ""
-        echo "❌ Certificate generation failed!"
+        echo "[ERROR] Certificate generation failed!"
         echo ""
         echo "Common issues:"
         echo "  1. DNS not propagated yet (wait 5-10 minutes)"
         echo "  2. Firewall blocking port 80"
         echo "  3. Another service using port 80"
         echo ""
-        echo "Verify DNS:"
-        echo "  dig $MATRIX_DOMAIN"
-        echo "  dig $ELEMENT_DOMAIN"
-        echo ""
-        echo "Check firewall:"
-        echo "  sudo iptables -L INPUT -n | grep 80"
-        echo ""
         exit 1
     }
 
 echo ""
-echo "✓ SSL Certificates obtained successfully!"
+echo "[OK] SSL Certificates obtained successfully!"
 echo ""
 
 # Show certificate details
@@ -133,20 +158,20 @@ sleep 3
 
 # Verify nginx started
 if docker compose ps nginx | grep -q "Up"; then
-    echo "✓ nginx is running"
+    echo "[OK] nginx is running"
 else
-    echo "❌ nginx failed to start"
+    echo "[ERROR] nginx failed to start"
     docker compose logs nginx --tail=20
     exit 1
 fi
 
 echo ""
-echo "╔══════════════════════════════════════════════════════════╗"
-echo "║  SSL Setup Complete!                                     ║"
-echo "╚══════════════════════════════════════════════════════════╝"
+echo "=========================================================="
+echo "  SSL Setup Complete!"
+echo "=========================================================="
 echo ""
-echo "✓ Certificates obtained for both domains"
-echo "✓ nginx restarted with SSL"
+echo "[OK] Certificates obtained for all domains"
+echo "[OK] nginx restarted with SSL"
 echo ""
 echo "Test your deployment:"
 echo "  Matrix Backend:  https://$MATRIX_DOMAIN"

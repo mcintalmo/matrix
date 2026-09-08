@@ -1,0 +1,467 @@
+#!/usr/bin/env bash
+# matrix-ctl: Unified non-interactive management CLI for Matrix / MAS / LiveKit stack.
+# Designed for automated operations, CI/CD pipelines, and AI agent control.
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+log_info() {
+    echo "[INFO] $*"
+}
+
+log_ok() {
+    echo "[OK] $*"
+}
+
+log_warn() {
+    echo "[WARN] $*" >&2
+}
+
+log_error() {
+    echo "[ERROR] $*" >&2
+}
+
+load_env() {
+    if [ -f "$PROJECT_ROOT/.env" ]; then
+        set -a
+        # shellcheck disable=SC1091
+        source "$PROJECT_ROOT/.env"
+        set +a
+    fi
+}
+
+cmd_check() {
+    log_info "Running pre-flight validation checks..."
+    local errors=0
+    local warnings=0
+
+    # 1. Check .env file
+    if [ ! -f "$PROJECT_ROOT/.env" ]; then
+        log_warn ".env file not found at $PROJECT_ROOT/.env"
+        ((warnings++))
+    else
+        log_ok ".env file exists"
+    fi
+
+    load_env
+
+    # 2. Check essential environment variables
+    local required_vars=(
+        "DOMAIN"
+        "SERVER_IP"
+        "MATRIX_FQDN"
+        "ELEMENT_WEB_FQDN"
+        "LIVEKIT_FQDN"
+        "SECRETS_POSTGRES_PASSWORD"
+        "SECRETS_MAS_ADMIN_TOKEN"
+        "SECRETS_MAS_MATRIX_SECRET"
+        "LIVEKIT_KEY"
+        "LIVEKIT_SECRET"
+        "GMAIL_ACCOUNT"
+        "GMAIL_APP_PASSWORD"
+    )
+
+    for var in "${required_vars[@]}"; do
+        if [ -z "${!var:-}" ]; then
+            log_error "Missing required environment variable: $var"
+            ((errors++))
+        else
+            log_ok "Variable $var is set"
+        fi
+    done
+
+    # 3. Check template files
+    local required_templates=(
+        "synapse/homeserver.yaml.template"
+        "mas/config.yaml.template"
+        "nginx/nginx.conf.template"
+        "livekit/config.yaml.template"
+        "element-web/config.json.template"
+        "element-call/config.json.template"
+    )
+
+    for tmpl in "${required_templates[@]}"; do
+        if [ ! -f "$PROJECT_ROOT/$tmpl" ]; then
+            log_error "Missing configuration template: $tmpl"
+            ((errors++))
+        else
+            log_ok "Template $tmpl exists"
+        fi
+    done
+
+    # 4. Check docker compose configuration syntax if docker is available
+    if command -v docker >/dev/null 2>&1; then
+        if docker compose -f "$PROJECT_ROOT/docker-compose.yml" config -q 2>/dev/null; then
+            log_ok "docker-compose.yml syntax and variable substitution valid"
+        else
+            log_warn "docker compose config validation returned non-zero (may require running daemon or full environment)"
+            ((warnings++))
+        fi
+    else
+        log_warn "docker command not available in PATH"
+        ((warnings++))
+    fi
+
+    echo ""
+    log_info "Check summary: $(( ${#required_vars[@]} + ${#required_templates[@]} + 2 - errors - warnings )) passed, $warnings warnings, $errors errors."
+
+    if [ "$errors" -gt 0 ]; then
+        log_error "Pre-flight check failed with $errors errors."
+        return 1
+    fi
+    log_ok "Pre-flight check completed successfully."
+    return 0
+}
+
+cmd_render() {
+    log_info "Rendering configuration templates from environment..."
+    load_env
+
+    if ! command -v envsubst >/dev/null 2>&1; then
+        log_error "envsubst command not found. Please install gettext."
+        return 1
+    fi
+
+    # 1. Synapse homeserver.yaml
+    if [ -f "$PROJECT_ROOT/synapse/homeserver.yaml.template" ]; then
+        envsubst < "$PROJECT_ROOT/synapse/homeserver.yaml.template" > "$PROJECT_ROOT/synapse/homeserver.yaml"
+        log_ok "Rendered synapse/homeserver.yaml"
+    fi
+
+    # 2. Nginx configuration (strictly scoped to avoid wiping Nginx internal variables like $host)
+    if [ -f "$PROJECT_ROOT/nginx/nginx.conf.template" ]; then
+        envsubst '${DOMAIN} ${MATRIX_FQDN} ${ELEMENT_WEB_FQDN} ${ELEMENT_CALL_FQDN} ${LIVEKIT_FQDN} ${CHAT_FQDN} ${CALL_FQDN}' \
+            < "$PROJECT_ROOT/nginx/nginx.conf.template" > "$PROJECT_ROOT/nginx/nginx.conf"
+        log_ok "Rendered nginx/nginx.conf (scoped variables preserved)"
+    fi
+
+    # 3. MAS configuration (requires indented signing key if present)
+    if [ -f "$PROJECT_ROOT/mas/config.yaml.template" ]; then
+        if [ -n "${MAS_SIGNING_KEY:-}" ]; then
+            export MAS_SIGNING_KEY_INDENTED="$(echo "$MAS_SIGNING_KEY" | awk '{print "        " $0}')"
+        else
+            export MAS_SIGNING_KEY_INDENTED=""
+        fi
+        envsubst < "$PROJECT_ROOT/mas/config.yaml.template" > "$PROJECT_ROOT/mas/config.yaml"
+        log_ok "Rendered mas/config.yaml"
+    fi
+
+    # 4. Element Web config
+    if [ -f "$PROJECT_ROOT/element-web/config.json.template" ]; then
+        envsubst < "$PROJECT_ROOT/element-web/config.json.template" > "$PROJECT_ROOT/element-web/config.json"
+        log_ok "Rendered element-web/config.json"
+    fi
+
+    # 5. Element Call config
+    if [ -f "$PROJECT_ROOT/element-call/config.json.template" ]; then
+        envsubst < "$PROJECT_ROOT/element-call/config.json.template" > "$PROJECT_ROOT/element-call/config.json"
+        log_ok "Rendered element-call/config.json"
+    fi
+
+    # 6. LiveKit config
+    if [ -f "$PROJECT_ROOT/livekit/config.yaml.template" ]; then
+        envsubst < "$PROJECT_ROOT/livekit/config.yaml.template" > "$PROJECT_ROOT/livekit/config.yaml"
+        log_ok "Rendered livekit/config.yaml"
+    fi
+
+    # 7. Telemetry alertmanager config if template exists
+    if [ -f "$PROJECT_ROOT/telemetry/alertmanager.yml.template" ]; then
+        mkdir -p "$PROJECT_ROOT/telemetry"
+        envsubst < "$PROJECT_ROOT/telemetry/alertmanager.yml.template" > "$PROJECT_ROOT/telemetry/alertmanager.yml"
+        log_ok "Rendered telemetry/alertmanager.yml"
+    fi
+
+    # 8. Nginx htpasswd for Grafana authentication
+    mkdir -p "$PROJECT_ROOT/nginx"
+    if [ -n "${SECRETS_POSTGRES_PASSWORD:-}" ]; then
+        if command -v htpasswd >/dev/null 2>&1; then
+            htpasswd -b -c "$PROJECT_ROOT/nginx/.htpasswd" admin "$SECRETS_POSTGRES_PASSWORD" >/dev/null 2>&1
+            log_ok "Generated nginx/.htpasswd via htpasswd"
+        elif command -v openssl >/dev/null 2>&1; then
+            local hash
+            hash="$(openssl passwd -apr1 "$SECRETS_POSTGRES_PASSWORD")"
+            echo "admin:$hash" > "$PROJECT_ROOT/nginx/.htpasswd"
+            log_ok "Generated nginx/.htpasswd via openssl"
+        else
+            touch "$PROJECT_ROOT/nginx/.htpasswd"
+            log_warn "Created blank nginx/.htpasswd (neither htpasswd nor openssl available)"
+        fi
+    else
+        touch "$PROJECT_ROOT/nginx/.htpasswd"
+    fi
+
+    log_ok "All templates successfully rendered."
+    return 0
+}
+
+cmd_status() {
+    local format="text"
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --json)
+                format="json"
+                shift
+                ;;
+            *)
+                shift
+                ;;
+        esac
+    done
+
+    cd "$PROJECT_ROOT"
+
+    local synapse_health="unreachable"
+    local mas_health="unreachable"
+    local webhook_health="unreachable"
+    local postgres_health="unreachable"
+
+    local pg_user="${POSTGRES_USER:-postgres}"
+    if command -v docker >/dev/null 2>&1; then
+        if docker compose exec -T postgres pg_isready -U "$pg_user" >/dev/null 2>&1 || docker compose exec -T postgres pg_isready -U postgres >/dev/null 2>&1; then
+            postgres_health="ok"
+        fi
+        if docker compose exec -T synapse curl -sf http://localhost:8008/health >/dev/null 2>&1 || curl -sf -k "https://${DOMAIN:-localhost}/_matrix/client/versions" >/dev/null 2>&1; then
+            synapse_health="ok"
+        fi
+        if docker compose ps mas 2>/dev/null | grep -q "Up"; then
+            mas_health="ok"
+        fi
+        if docker compose ps rageshake-webhook 2>/dev/null | grep -q "Up"; then
+            webhook_health="ok"
+        fi
+    fi
+
+    local disk_used_pct="unknown"
+    if command -v df >/dev/null 2>&1; then
+        disk_used_pct="$(df / | tail -1 | awk '{print $5}' | tr -d '%')"
+    fi
+
+    local mem_used_pct="unknown"
+    if command -v free >/dev/null 2>&1; then
+        mem_used_pct="$(free | awk '/Mem:/ {print int($3/$2 * 100)}')"
+    fi
+
+    if [ "$format" = "json" ]; then
+        local services_json="[]"
+        if command -v docker >/dev/null 2>&1; then
+            services_json="$(docker compose ps --format json 2>/dev/null || echo "[]")"
+        fi
+
+        cat <<EOF
+{
+  "status": "online",
+  "health": {
+    "synapse": "$synapse_health",
+    "mas": "$mas_health",
+    "rageshake_webhook": "$webhook_health",
+    "postgres": "$postgres_health"
+  },
+  "system": {
+    "disk_used_pct": "$disk_used_pct",
+    "mem_used_pct": "$mem_used_pct"
+  },
+  "services": $services_json
+}
+EOF
+    else
+        log_info "=== Matrix Service Status ==="
+        echo "Synapse (8008):           $synapse_health"
+        echo "MAS (8090):               $mas_health"
+        echo "Rageshake Webhook (8088): $webhook_health"
+        echo "PostgreSQL:               $postgres_health"
+        echo "Disk Utilization:         ${disk_used_pct}%"
+        echo "Memory Utilization:       ${mem_used_pct}%"
+        echo ""
+        log_info "=== Container Status ==="
+        if command -v docker >/dev/null 2>&1; then
+            docker compose ps
+        else
+            echo "Docker command not available."
+        fi
+    fi
+}
+
+cmd_token() {
+    local days="365"
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --days)
+                days="$2"
+                shift 2
+                ;;
+            *)
+                shift
+                ;;
+        esac
+    done
+
+    cd "$PROJECT_ROOT"
+    log_info "Requesting registration token from MAS CLI..."
+
+    local raw_output
+    raw_output="$(docker compose exec -T mas mas-cli --config /config.yaml manage issue-user-registration-token 2>&1 || true)"
+
+    local token
+    token="$(echo "$raw_output" | grep -ioE "token:\s*([a-zA-Z0-9_-]+)" | awk '{print $2}' || true)"
+
+    if [ -z "$token" ]; then
+        # Try finding bare token in output
+        token="$(echo "$raw_output" | grep -oE '\b[a-zA-Z0-9]{16,}\b' | head -1 || true)"
+    fi
+
+    if [ -z "$token" ]; then
+        log_error "Failed to extract registration token from MAS CLI output."
+        echo "$raw_output"
+        return 1
+    fi
+
+    log_info "Token generated: $token. Updating expiration to $days days in database..."
+
+    local pg_user="${POSTGRES_USER:-postgres}"
+    if ! docker compose exec -T postgres psql -U "$pg_user" -d mas -c "SELECT 1;" >/dev/null 2>&1; then
+        pg_user="postgres"
+    fi
+
+    docker compose exec -T postgres psql -U "$pg_user" -d mas -c \
+        "UPDATE user_registration_tokens SET expires_at = NOW() + INTERVAL '${days} days' WHERE token = '${token}';" >/dev/null 2>&1 || true
+
+    log_ok "Registration token generated successfully."
+    echo "TOKEN: $token"
+    echo "EXPIRES_IN_DAYS: $days"
+    return 0
+}
+
+cmd_create_admin() {
+    local username=""
+    local password=""
+    local email=""
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --username)
+                username="$2"
+                shift 2
+                ;;
+            --password)
+                password="$2"
+                shift 2
+                ;;
+            --email)
+                email="$2"
+                shift 2
+                ;;
+            *)
+                shift
+                ;;
+        esac
+    done
+
+    if [ -z "$username" ] || [ -z "$password" ]; then
+        log_error "Usage: matrix-ctl create-admin --username <USER> --password <PASS> [--email <EMAIL>]"
+        return 1
+    fi
+
+    if [ -z "$email" ]; then
+        email="${username}@localhost"
+    fi
+
+    cd "$PROJECT_ROOT"
+    log_info "Creating admin user '$username' directly in MAS database..."
+
+    local user_id
+    local email_id
+    user_id="$(uuidgen 2>/dev/null | tr '[:upper:]' '[:lower:]' || cat /proc/sys/kernel/random/uuid 2>/dev/null || python3 -c 'import uuid; print(uuid.uuid4())')"
+    email_id="$(uuidgen 2>/dev/null | tr '[:upper:]' '[:lower:]' || cat /proc/sys/kernel/random/uuid 2>/dev/null || python3 -c 'import uuid; print(uuid.uuid4())')"
+
+    local password_hash
+    password_hash="$(docker compose exec -T postgres python3 -c "
+from passlib.hash import argon2
+import sys
+h = argon2.using(type='ID', memory_cost=19456, time_cost=2, parallelism=1, salt_len=16, digest_size=32).hash('''$password''')
+print(h)
+" 2>/dev/null || true)"
+
+    if [ -z "$password_hash" ]; then
+        password_hash="$(docker compose exec -T mas mas-cli manage hash-password <<< "$password" 2>/dev/null | tail -1 || true)"
+    fi
+
+    if [ -z "$password_hash" ]; then
+        log_error "Could not compute argon2id password hash for admin user."
+        return 1
+    fi
+
+    local pg_user="${POSTGRES_USER:-postgres}"
+    if ! docker compose exec -T postgres psql -U "$pg_user" -d mas -c "SELECT 1;" >/dev/null 2>&1; then
+        pg_user="postgres"
+    fi
+
+    docker compose exec -T postgres psql -U "$pg_user" -d mas <<-EOSQL >/dev/null 2>&1
+        INSERT INTO users (user_id, username, created_at, can_request_admin)
+        VALUES ('$user_id', '$username', NOW(), true)
+        ON CONFLICT (username) DO UPDATE SET can_request_admin = true;
+
+        INSERT INTO user_emails (user_email_id, user_id, email, created_at, confirmed_at)
+        VALUES ('$email_id', '$user_id', '$email', NOW(), NOW())
+        ON CONFLICT DO NOTHING;
+
+        UPDATE users SET primary_user_email_id = '$email_id' WHERE user_id = '$user_id';
+
+        INSERT INTO user_passwords (user_password_id, user_id, hashed_password, created_at, version)
+        VALUES (gen_random_uuid(), '$user_id', '$password_hash', NOW(), 1);
+EOSQL
+
+    log_ok "Admin user '$username' created successfully in MAS database."
+    return 0
+}
+
+usage() {
+    cat <<EOF
+Usage: matrix-ctl <command> [options]
+
+Unified management CLI for the Matrix / MAS / LiveKit deployment.
+
+Commands:
+  check                     Perform pre-flight verification of configuration, templates, and environment.
+  render                    Compile all template configurations (.template -> config) with envsubst.
+  status [--json]           Report health and container status. Output clean text or JSON.
+  token [--days <N>]        Generate a registration token valid for N days (default: 365).
+  create-admin [options]    Create an admin user non-interactively.
+                              --username <USER>
+                              --password <PASS>
+                              --email <EMAIL> (optional)
+  help                      Display this help documentation.
+
+EOF
+}
+
+case "${1:-}" in
+    check)
+        shift
+        cmd_check "$@"
+        ;;
+    render)
+        shift
+        cmd_render "$@"
+        ;;
+    status)
+        shift
+        cmd_status "$@"
+        ;;
+    token)
+        shift
+        cmd_token "$@"
+        ;;
+    create-admin)
+        shift
+        cmd_create_admin "$@"
+        ;;
+    help|--help|-h)
+        usage
+        ;;
+    *)
+        usage
+        exit 1
+        ;;
+esac

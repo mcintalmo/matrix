@@ -1,7 +1,7 @@
 {
     "default_server_config": {
         "m.homeserver": {
-            "base_url": "https://${HOMESERVER_FQDN}",
+            "base_url": "https://${MATRIX_FQDN}",
             "server_name": "${DOMAIN}"
         }
     },
@@ -17,7 +17,8 @@
     "features": {
         "feature_video_rooms": true,
         "feature_group_calls": true,
-        "feature_element_call_video_rooms": true,
+        "feature_element_call_video_rooms": false,
+        "feature_matrix_rtc": true,
         "feature_oidc_native_flow": true,
         "feature_require_secure_backup_setup": true
     },
@@ -27,9 +28,25 @@
         "servers": ["${DOMAIN}"]
     },
     "setting_defaults": {
-        "breadcrumbs": true
+        "breadcrumbs": true,
+        "Voice.use_webrtc_for_video_rooms": true,
+        "im.vector.web.voice_video_settings": {
+            "audioInput": true,
+            "videoInput": null
+        },
+        "io.element.video_rooms": {
+            "defaultAudioEnabled": true,
+            "defaultVideoEnabled": false,
+            "skipLobby": true
+        }
     },
     "element_call": {
-        "url": "https://${ELEMENT_CALL_FQDN}"
-    }
+        "url": "https://${CALL_FQDN}?skipLobby=true&defaultVideoEnabled=false",
+        "guest_spa_url": "https://${CALL_FQDN}?skipLobby=true&defaultVideoEnabled=false"
+    },
+    "livekit": {
+        "livekit_service_url": "https://${CALL_FQDN}/jwt"
+    },
+    "bug_report_endpoint_url": "https://${MATRIX_FQDN}/_matrix/client/unstable/rageshake/submit",
+    "rageshake_submit_url": "https://${MATRIX_FQDN}/_matrix/client/unstable/rageshake/submit"
 }

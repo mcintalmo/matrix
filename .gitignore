@@ -23,6 +23,7 @@ synapse/homeserver.yaml
 mas/config.yaml
 telemetry/alertmanager.yml
 nginx/.htpasswd
+nginx/nginx.conf
 mas/keys/
 
 # ── Synapse Signing Key ───────────────────────────────────────────────────────
@@ -81,3 +82,12 @@ certs/
 
 # ── Archive ───────────────────────────────────────────────────────────────────
 .archive/
+
+# ── Python ────────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.ruff_cache/
+.venv/
+

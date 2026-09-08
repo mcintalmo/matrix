@@ -75,14 +75,14 @@ chmod 700 "$MAS_KEYS_DIR"
 # Generate RSA private key (2048-bit)
 openssl genrsa -out "$MAS_KEYS_DIR/signing-key.pem" 2048 2>/dev/null
 chmod 600 "$MAS_KEYS_DIR/signing-key.pem"
-echo "✓ Generated RSA signing key at $MAS_KEYS_DIR/signing-key.pem"
+echo "[OK] Generated RSA signing key at $MAS_KEYS_DIR/signing-key.pem"
 
 # Write Docker secret for postgres password (used by postgres container via POSTGRES_PASSWORD_FILE)
 SECRETS_DIR="$SCRIPT_DIR/../secrets"
 mkdir -p "$SECRETS_DIR"
 echo -n "$SECRETS_POSTGRES_PASSWORD" > "$SECRETS_DIR/postgres_password"
 chmod 600 "$SECRETS_DIR/postgres_password"
-echo "✓ Docker secret written to $SECRETS_DIR/postgres_password"
+echo "[OK] Docker secret written to $SECRETS_DIR/postgres_password"
 
 # Create .env file
 cat > "$ENV_FILE" << EOF
@@ -124,14 +124,14 @@ EOF
 chmod 600 "$ENV_FILE"
 
 echo ""
-echo "✓ .env file created successfully!"
-echo "✓ Permissions set to 600 (owner read/write only)"
+echo "[OK] .env file created successfully!"
+echo "[OK] Permissions set to 600 (owner read/write only)"
 echo ""
 echo "Configuration:"
 echo "  Server:    $SYNAPSE_SERVER_NAME"
 echo "  Location:  $ENV_FILE"
 echo ""
-echo "🔒 IMPORTANT: This file contains sensitive secrets!"
+echo "[INFO] IMPORTANT: This file contains sensitive secrets!"
 echo "   - Never commit it to git (already in .gitignore)"
 echo "   - Keep backups in a secure location"
 echo "   - Regenerating this file will break existing installations"

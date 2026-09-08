@@ -19,7 +19,7 @@ http {
     # Redirect all HTTP traffic to HTTPS
     server {
         listen 80;
-        server_name matrix.rumpusroom.xyz rumpusroom.xyz chat.rumpusroom.xyz element.rumpusroom.xyz call.rumpusroom.xyz livekit.rumpusroom.xyz;
+        server_name ${MATRIX_FQDN} ${DOMAIN} ${CHAT_FQDN} ${ELEMENT_WEB_FQDN} element.${DOMAIN} ${CALL_FQDN} ${ELEMENT_CALL_FQDN} ${LIVEKIT_FQDN};
 
         # ACME challenge for Let's Encrypt renewals
         location /.well-known/acme-challenge/ {
@@ -34,17 +34,22 @@ http {
     # Main server block for Matrix and MAS API endpoints
     server {
         listen 443 ssl http2;
-        server_name matrix.rumpusroom.xyz rumpusroom.xyz;
+        server_name ${MATRIX_FQDN} ${DOMAIN};
 
-        ssl_certificate /etc/letsencrypt/live/matrix.rumpusroom.xyz/fullchain.pem;
-        ssl_certificate_key /etc/letsencrypt/live/matrix.rumpusroom.xyz/privkey.pem;
+        ssl_certificate /etc/letsencrypt/live/${MATRIX_FQDN}/fullchain.pem;
+        ssl_certificate_key /etc/letsencrypt/live/${MATRIX_FQDN}/privkey.pem;
         ssl_protocols TLSv1.2 TLSv1.3;
         ssl_prefer_server_ciphers on;
 
         # OCSP stapling - server pre-fetches cert status so browsers don't have to
         ssl_stapling on;
         ssl_stapling_verify on;
-        ssl_trusted_certificate /etc/letsencrypt/live/matrix.rumpusroom.xyz/chain.pem;
+        ssl_trusted_certificate /etc/letsencrypt/live/${MATRIX_FQDN}/chain.pem;
+
+        # ACME challenge for Let's Encrypt renewals (Cloudflare HTTPS Redirect bypass)
+        location /.well-known/acme-challenge/ {
+            root /var/www/certbot;
+        }
 
         # Well-Known Discovery (served inline by nginx)
         location /.well-known/matrix/server {
@@ -63,7 +68,7 @@ http {
                 return 204;
             }
 
-            return 200 '{"m.server": "matrix.rumpusroom.xyz:443"}';
+            return 200 '{"m.server": "${MATRIX_FQDN}:443"}';
         }
 
         location /.well-known/matrix/client {
@@ -84,16 +89,16 @@ http {
 
             return 200 '{
                 "m.homeserver": {
-                    "base_url": "https://matrix.rumpusroom.xyz"
+                    "base_url": "https://${MATRIX_FQDN}"
                 },
                 "org.matrix.msc2965.authentication": {
-                    "issuer": "https://matrix.rumpusroom.xyz/",
-                    "account": "https://matrix.rumpusroom.xyz/account"
+                    "issuer": "https://${MATRIX_FQDN}/",
+                    "account": "https://${MATRIX_FQDN}/account"
                 },
                 "org.matrix.msc4143.rtc_foci": [
                     {
                         "type": "livekit",
-                        "livekit_service_url": "https://call.rumpusroom.xyz"
+                        "livekit_service_url": "https://${CALL_FQDN}/jwt"
                     }
                 ],
                 "io.element.e2ee": {
@@ -103,41 +108,48 @@ http {
         }
 
         # ── Synapse Generic Worker Routes ─────────────────────────────────────────
-        # Intercept heavy endpoints and route to the generic-worker
-        # location ~ ^/_matrix/client/(r0|v3)/sync$ {
-        #     proxy_pass http://synapse-generic-worker-1:8081;
-        #     proxy_set_header X-Forwarded-For $remote_addr;
-        #     proxy_set_header X-Forwarded-Proto $scheme;
-        #     proxy_set_header Host $host;
-        #     proxy_set_header Authorization $http_authorization;
-        # }
-        # 
-        # location ~ ^/_matrix/client/(api/v1|r0|v3)/events$ {
-        #     proxy_pass http://synapse-generic-worker-1:8081;
-        #     proxy_set_header X-Forwarded-For $remote_addr;
-        #     proxy_set_header X-Forwarded-Proto $scheme;
-        #     proxy_set_header Host $host;
-        #     proxy_set_header Authorization $http_authorization;
-        # }
-        # 
-        # location ~ ^/_matrix/client/(api/v1|r0|v3)/initialSync$ {
-        #     proxy_pass http://synapse-generic-worker-1:8081;
-        #     proxy_set_header X-Forwarded-For $remote_addr;
-        #     proxy_set_header X-Forwarded-Proto $scheme;
-        #     proxy_set_header Host $host;
-        #     proxy_set_header Authorization $http_authorization;
-        # }
-        # 
-        # location ~ ^/_matrix/client/(api/v1|r0|v3)/rooms/[^/]+/initialSync$ {
-        #     proxy_pass http://synapse-generic-worker-1:8081;
-        #     proxy_set_header X-Forwarded-For $remote_addr;
-        #     proxy_set_header X-Forwarded-Proto $scheme;
-        #     proxy_set_header Host $host;
-        #     proxy_set_header Authorization $http_authorization;
-        # }
+        # Offload client sync and events to synapse-generic-worker-1
+        location ~ ^/_matrix/client/(r0|v3)/sync$ {
+            proxy_pass http://synapse-generic-worker-1:8081;
+            proxy_set_header X-Forwarded-For $remote_addr;
+            proxy_set_header X-Forwarded-Proto $scheme;
+            proxy_set_header Host $host;
+            proxy_set_header Authorization $http_authorization;
+            proxy_http_version 1.1;
+            proxy_set_header Upgrade $http_upgrade;
+            proxy_set_header Connection "upgrade";
+            proxy_read_timeout 600s;
+        }
+
+        location ~ ^/_matrix/client/(api/v1|r0|v3)/events$ {
+            proxy_pass http://synapse-generic-worker-1:8081;
+            proxy_set_header X-Forwarded-For $remote_addr;
+            proxy_set_header X-Forwarded-Proto $scheme;
+            proxy_set_header Host $host;
+            proxy_set_header Authorization $http_authorization;
+            proxy_read_timeout 600s;
+        }
+
+        location ~ ^/_matrix/client/(api/v1|r0|v3)/initialSync$ {
+            proxy_pass http://synapse-generic-worker-1:8081;
+            proxy_set_header X-Forwarded-For $remote_addr;
+            proxy_set_header X-Forwarded-Proto $scheme;
+            proxy_set_header Host $host;
+            proxy_set_header Authorization $http_authorization;
+            proxy_read_timeout 600s;
+        }
+
+        location ~ ^/_matrix/client/(api/v1|r0|v3)/rooms/[^/]+/initialSync$ {
+            proxy_pass http://synapse-generic-worker-1:8081;
+            proxy_set_header X-Forwarded-For $remote_addr;
+            proxy_set_header X-Forwarded-Proto $scheme;
+            proxy_set_header Host $host;
+            proxy_set_header Authorization $http_authorization;
+            proxy_read_timeout 600s;
+        }
 
         # ── Matrix Authentication Service (MAS) Routes ────────────────────────────
-        location ~ ^/_matrix/client/(.*)/(login|logout|refresh) {
+        location ~ ^/_matrix/client/(.*)/(login|logout|refresh|register) {
             proxy_pass http://mas:8090;
             proxy_set_header X-Forwarded-For $remote_addr;
             proxy_set_header X-Forwarded-Proto $scheme;
@@ -170,6 +182,24 @@ http {
         }
 
         # ── Synapse Main App Routes ───────────────────────────────────────────
+        
+        # Element Web Rageshake / Crash Telemetry Interceptor
+        location /_matrix/client/unstable/rageshake/submit {
+            proxy_pass http://rageshake-webhook:8000/submit;
+            proxy_set_header X-Forwarded-For $remote_addr;
+            proxy_set_header X-Forwarded-Proto $scheme;
+            proxy_set_header Host $host;
+            client_max_body_size 50M;
+        }
+
+        location /_matrix/client/unstable/rageshake/health {
+            proxy_pass http://rageshake-webhook:8000/health;
+        }
+
+        location /rageshake/ {
+            proxy_pass http://rageshake-webhook:8000/;
+        }
+
         # Synapse: Matrix client/federation API routes
         location /_matrix {
             proxy_pass http://synapse:8008;
@@ -200,22 +230,48 @@ http {
             proxy_set_header X-Forwarded-For $remote_addr;
             proxy_set_header X-Forwarded-Proto $scheme;
             proxy_set_header Host $host;
+            proxy_set_header Authorization $http_authorization;
+        }
+    }
+
+    # Canonical Redirect Block: Routing legacy Element aliases to the primary Web frontend
+    server {
+        listen 443 ssl http2;
+        server_name ${CHAT_FQDN} element.${DOMAIN};
+
+        ssl_certificate /etc/letsencrypt/live/${MATRIX_FQDN}/fullchain.pem;
+        ssl_certificate_key /etc/letsencrypt/live/${MATRIX_FQDN}/privkey.pem;
+        ssl_protocols TLSv1.2 TLSv1.3;
+        ssl_prefer_server_ciphers on;
+
+        # ACME challenge for Let's Encrypt renewals (Cloudflare HTTPS Redirect bypass)
+        location /.well-known/acme-challenge/ {
+            root /var/www/certbot;
+        }
+
+        location / {
+            return 301 https://${ELEMENT_WEB_FQDN}$request_uri;
         }
     }
 
     # Element Web Application Block
     server {
         listen 443 ssl http2;
-        server_name chat.rumpusroom.xyz element.rumpusroom.xyz;
+        server_name ${ELEMENT_WEB_FQDN};
 
-        ssl_certificate /etc/letsencrypt/live/matrix.rumpusroom.xyz/fullchain.pem;
-        ssl_certificate_key /etc/letsencrypt/live/matrix.rumpusroom.xyz/privkey.pem;
+        ssl_certificate /etc/letsencrypt/live/${MATRIX_FQDN}/fullchain.pem;
+        ssl_certificate_key /etc/letsencrypt/live/${MATRIX_FQDN}/privkey.pem;
         ssl_protocols TLSv1.2 TLSv1.3;
         ssl_prefer_server_ciphers on;
 
         ssl_stapling on;
         ssl_stapling_verify on;
-        ssl_trusted_certificate /etc/letsencrypt/live/matrix.rumpusroom.xyz/chain.pem;
+        ssl_trusted_certificate /etc/letsencrypt/live/${MATRIX_FQDN}/chain.pem;
+
+        # ACME challenge for Let's Encrypt renewals (Cloudflare HTTPS Redirect bypass)
+        location /.well-known/acme-challenge/ {
+            root /var/www/certbot;
+        }
 
         location ~* \.(js|css|woff2|woff|ttf|ico|png|svg|jpg|webp)$ {
             proxy_pass http://element-web:80;
@@ -237,12 +293,36 @@ http {
     # Element Call Application Block
     server {
         listen 443 ssl http2;
-        server_name call.rumpusroom.xyz;
+        server_name ${CALL_FQDN} ${ELEMENT_CALL_FQDN};
 
-        ssl_certificate /etc/letsencrypt/live/matrix.rumpusroom.xyz/fullchain.pem;
-        ssl_certificate_key /etc/letsencrypt/live/matrix.rumpusroom.xyz/privkey.pem;
+        ssl_certificate /etc/letsencrypt/live/${MATRIX_FQDN}/fullchain.pem;
+        ssl_certificate_key /etc/letsencrypt/live/${MATRIX_FQDN}/privkey.pem;
         ssl_protocols TLSv1.2 TLSv1.3;
         ssl_prefer_server_ciphers on;
+
+        # ACME challenge for Let's Encrypt renewals (Cloudflare HTTPS Redirect bypass)
+        location /.well-known/acme-challenge/ {
+            root /var/www/certbot;
+        }
+
+        # Route WebRTC JWT token generation to the helper microservice
+        location /jwt/ {
+            rewrite ^/jwt/(.*) /$1 break;
+            proxy_pass http://livekit-jwt:8080;
+            proxy_set_header X-Forwarded-For $remote_addr;
+            proxy_set_header X-Forwarded-Proto $scheme;
+            proxy_set_header Host $host;
+            # WebSockets support
+            proxy_http_version 1.1;
+            proxy_set_header Upgrade $http_upgrade;
+            proxy_set_header Connection "upgrade";
+        }
+
+        # Route WebRTC signaling to the LiveKit server
+        location /rtc {
+            # Legacy stub mapping to gently migrate client cache over
+            return 301 https://${LIVEKIT_FQDN}/rtc;
+        }
 
         location / {
             proxy_pass http://element-call:8080;
@@ -253,26 +333,22 @@ http {
         }
     }
 
-    # LiveKit JWT and API Block
+    # LiveKit Media Server Block
     server {
         listen 443 ssl http2;
-        server_name livekit.rumpusroom.xyz;
+        server_name ${LIVEKIT_FQDN};
 
-        ssl_certificate /etc/letsencrypt/live/matrix.rumpusroom.xyz/fullchain.pem;
-        ssl_certificate_key /etc/letsencrypt/live/matrix.rumpusroom.xyz/privkey.pem;
+        ssl_certificate /etc/letsencrypt/live/${MATRIX_FQDN}/fullchain.pem;
+        ssl_certificate_key /etc/letsencrypt/live/${MATRIX_FQDN}/privkey.pem;
         ssl_protocols TLSv1.2 TLSv1.3;
         ssl_prefer_server_ciphers on;
-        
-        # Route LiveKit HTTP checks
-        location / {
-            proxy_pass http://livekit:7880;
-            proxy_set_header X-Forwarded-For $remote_addr;
-            proxy_set_header X-Forwarded-Proto $scheme;
-            proxy_set_header Host $host;
+
+        # ACME challenge for Let's Encrypt renewals (Cloudflare HTTPS Redirect bypass)
+        location /.well-known/acme-challenge/ {
+            root /var/www/certbot;
         }
 
-        # Route WebRTC signaling to the LiveKit server
-        location /rtc {
+        location / {
             proxy_pass http://livekit:7880;
             proxy_set_header X-Forwarded-For $remote_addr;
             proxy_set_header X-Forwarded-Proto $scheme;

@@ -29,7 +29,7 @@ cd "$APP_DIR"
 # 1. Postgres full dump (all databases: synapse + mas)
 echo "Dumping PostgreSQL..."
 docker compose exec -T postgres pg_dumpall -U postgres | gzip > "$BACKUP_DIR/postgres.sql.gz"
-echo "  ✓ Postgres: $(du -sh $BACKUP_DIR/postgres.sql.gz | cut -f1)"
+echo "  [OK] Postgres: $(du -sh $BACKUP_DIR/postgres.sql.gz | cut -f1)"
 
 # 2. Synapse media store
 echo "Archiving media store..."
@@ -43,22 +43,23 @@ if docker volume inspect "$SYNAPSE_VOL" >/dev/null 2>&1; then
     bash -c "if [ -d /data/media_store ]; then tar -czf /backup/media.tar.gz -C /data media_store; fi"
   
   if [ -f "$BACKUP_DIR/media.tar.gz" ]; then
-    echo "  ✓ Media: $(du -sh $BACKUP_DIR/media.tar.gz | cut -f1)"
+    echo "  [OK] Media: $(du -sh $BACKUP_DIR/media.tar.gz | cut -f1)"
   else
-    echo "  ⚠ No media_store found inside volume, skipping"
+    echo "  [WARN] No media_store found inside volume, skipping"
   fi
 else
-  echo "  ⚠ Volume $SYNAPSE_VOL not found, skipping"
+  echo "  [WARN] Volume $SYNAPSE_VOL not found, skipping"
 fi
 
-# 3. Config snapshot (no secrets — those live in GitHub)
+# 3. Config snapshot (no secrets -- those live in GitHub)
 tar -czf "$BACKUP_DIR/config.tar.gz" \
   -C "$APP_DIR" \
-  nginx/nginx.conf docker-compose.yml synapse/homeserver.yaml.template element/config.json \
+  nginx/nginx.conf.template docker-compose.yml synapse/homeserver.yaml.template \
+  element-web/config.json.template element-call/config.json.template mas/config.yaml.template \
   2>/dev/null || true
-echo "  ✓ Config archived"
+echo "  [OK] Config archived"
 
-# 4. Upload to Oracle Object Storage (using Instance Principal auth — no credentials file needed)
+# 4. Upload to Oracle Object Storage (using Instance Principal auth -- no credentials file needed)
 echo "Uploading to OCI bucket '$OCI_BUCKET'..."
 $OCI os object bulk-upload \
   --auth instance_principal \
@@ -66,7 +67,7 @@ $OCI os object bulk-upload \
   --src-dir "$BACKUP_DIR" \
   --object-prefix "backups/$DATE/" \
   --overwrite
-echo "  ✓ Uploaded: backups/$DATE/"
+echo "  [OK] Uploaded: backups/$DATE/"
 
 # 5. Prune OCI backups older than RETAIN_DAYS (lifecycle policy also handles this)
 CUTOFF=$(date -d "$RETAIN_DAYS days ago" +%Y%m%d 2>/dev/null || date -v-${RETAIN_DAYS}d +%Y%m%d)

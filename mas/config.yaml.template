@@ -11,7 +11,7 @@
 # ============================================================================
 
 http:
-  public_base: "https://${MAS_FQDN}/"
+  public_base: "https://${MATRIX_FQDN}/"
   listeners:
     - name: web
       resources:
@@ -84,6 +84,10 @@ upstream_oauth2:
         displayname:
           action: "suggest"
           template: "{{ user.global_name }}"
+        email:
+          action: "require"
+          template: "{{ user.email }}"
+          set_email_verification: "import"
       additional_authorization_parameters:
         prompt: "none"
 
@@ -175,4 +179,4 @@ telemetry:
 # After deploying MAS:
 # 1. Initialize the database: make mas-init
 # 2. Create admin user: make mas-create-admin
-# 3. Configure phone auth via the admin UI at: https://matrix.rumpusroom.xyz/_auth/
+# 3. Configure phone auth via the admin UI at: https://${MATRIX_FQDN}/_auth/

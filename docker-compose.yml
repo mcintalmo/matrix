@@ -7,6 +7,9 @@ networks:
   backend:
     driver: bridge
     internal: true
+  # Egress network — specific gateway for services requiring internet access
+  egress:
+    driver: bridge
   # Public network — only for services that need direct host port access
   # (nginx, coturn, livekit).
   public:
@@ -28,7 +31,7 @@ services:
       POSTGRES_INITDB_ARGS: --encoding=UTF8 --locale=C
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./init-databases.sh:/docker-entrypoint-initdb.d/init-databases.sh:ro
+      - ./scripts/init-databases.sh:/docker-entrypoint-initdb.d/init-databases.sh:ro
     networks:
       - backend
     secrets:
@@ -41,8 +44,8 @@ services:
     deploy:
       resources:
         limits:
-          cpus: '2.0'
-          memory: 4096M
+          cpus: '1.0'
+          memory: 2048M
         reservations:
           cpus: '0.25'
           memory: 512M
@@ -69,9 +72,10 @@ services:
     volumes:
       - synapse_data:/data
       - ./synapse/homeserver.yaml:/data/homeserver.yaml:ro
-      - ./synapse-data/rumpusroom.xyz.signing.key:/data/rumpusroom.xyz.signing.key:ro
+      - ./synapse-data/${DOMAIN}.signing.key:/data/${DOMAIN}.signing.key:ro
     networks:
       - backend
+      - egress
     depends_on:
       postgres:
         condition: service_healthy
@@ -180,6 +184,7 @@ services:
     command: ["run", "--config-path=/data/homeserver.yaml", "--config-path=/data/workers/synapse-federation-sender-1.yaml"]
     networks:
       - backend
+      - egress
     depends_on:
       synapse:
         condition: service_healthy
@@ -215,6 +220,7 @@ services:
     command: ["server", "--config", "/config.yaml"]
     networks:
       - backend
+      - egress
     depends_on:
       postgres:
         condition: service_healthy
@@ -240,6 +246,7 @@ services:
     # No published ports — nginx proxies all external traffic.
     volumes:
       - ./element-web/config.json:/app/config.json:ro
+      - ./element-call/config.json:/app/widgets/element-call/config.json:ro
     networks:
       - backend
     depends_on:
@@ -294,14 +301,19 @@ services:
       - /etc/letsencrypt:/etc/letsencrypt:ro
       - /var/lib/letsencrypt:/var/lib/letsencrypt:ro
       - /var/www/certbot:/var/www/certbot:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     networks:
       backend:
         aliases:
           # These aliases let containers reach public FQDNs without leaving Docker
-          - matrix.rumpusroom.xyz
-          - element.rumpusroom.xyz
-          - call.rumpusroom.xyz
-          - rumpusroom.xyz
+          - ${MATRIX_FQDN}
+          - ${ELEMENT_WEB_FQDN}
+          - ${ELEMENT_CALL_FQDN}
+          - ${CALL_FQDN}
+          - ${CHAT_FQDN}
+          - ${LIVEKIT_FQDN}
+          - ${DOMAIN}
       public:
     depends_on:
       - synapse
@@ -333,8 +345,8 @@ services:
       TURN_SHARED_SECRET: ${SECRETS_TURN_SHARED_SECRET}
     command: >-
       --log-file=stdout
-      --external-ip=147.224.210.130
-      --realm=matrix.rumpusroom.xyz
+      --external-ip=${SERVER_IP}
+      --realm=${DOMAIN}
       --no-multicast-peers
       --use-auth-secret
       --static-auth-secret=${SECRETS_TURN_SHARED_SECRET}
@@ -362,17 +374,19 @@ services:
     ports:
       - "7881:7881"
       - "50000-50200:50000-50200/udp"
-    command: --config /etc/livekit.yaml
+    command: --config /etc/livekit.yaml --node-ip ${SERVER_IP}
     volumes:
       - ./livekit/config.yaml:/etc/livekit.yaml:ro
     networks:
-      - backend
-      - public
+      backend:
+        aliases:
+          - ${LIVEKIT_FQDN}
+      public:
     deploy:
       resources:
         limits:
-          cpus: "4.0"
-          memory: 4096M
+          cpus: "1.0"
+          memory: 2048M
 
   livekit-jwt:
     image: ghcr.io/element-hq/lk-jwt-service:latest
@@ -385,7 +399,7 @@ services:
     # No published ports — nginx proxies all external traffic.
     environment:
       - LK_JWT_PORT=8080
-      - LIVEKIT_URL=wss://livekit.rumpusroom.xyz
+      - LIVEKIT_URL=wss://${LIVEKIT_FQDN}
       - LIVEKIT_KEY=${LIVEKIT_KEY}
       - LIVEKIT_SECRET=${LIVEKIT_SECRET}
     networks:
@@ -452,6 +466,24 @@ services:
           cpus: '0.1'
           memory: 256M
 
+  rageshake-webhook:
+    build: ./rageshake-webhook
+    restart: unless-stopped
+    networks:
+      - backend
+      - egress
+    environment:
+      - SMTP_SERVER=${SMTP_SERVER:-smtp.gmail.com}
+      - SMTP_PORT=${SMTP_PORT:-587}
+      - SMTP_USER=${SMTP_USER:-${GMAIL_ACCOUNT}}
+      - SMTP_PASS=${SMTP_PASS:-${GMAIL_APP_PASSWORD}}
+      - RAGESHAKE_FORWARD_EMAIL=${RAGESHAKE_FORWARD_EMAIL:-${GMAIL_ACCOUNT}}
+    deploy:
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: 256M
+
   alertmanager:
     image: prom/alertmanager:latest
     restart: unless-stopped
@@ -466,6 +498,7 @@ services:
       - ./telemetry/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
     networks:
       - backend
+      - egress
     deploy:
       resources:
         limits:
@@ -476,6 +509,7 @@ services:
           memory: 32M
 
   jaeger:
+    profiles: ["debug"]
     image: jaegertracing/all-in-one:latest
     restart: unless-stopped
     logging:
@@ -507,7 +541,7 @@ services:
     environment:
       - GF_SECURITY_ADMIN_PASSWORD=${SECRETS_POSTGRES_PASSWORD}
       - GF_USERS_ALLOW_SIGN_UP=false
-      - GF_SERVER_ROOT_URL=https://${HOMESERVER_FQDN}/_grafana/
+      - GF_SERVER_ROOT_URL=https://${MATRIX_FQDN}/_grafana/
       - GF_SERVER_SERVE_FROM_SUB_PATH=true
     volumes:
       - grafana_data:/var/lib/grafana

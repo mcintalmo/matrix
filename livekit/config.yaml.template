@@ -6,8 +6,21 @@ rtc:
   port_range_start: 50000
   port_range_end: 50200
   use_external_ip: true
+  enable_dynacast: true
+audio:
+  active_level: 40
+video:
+  adaptive_stream: true
 keys:
   "${LIVEKIT_KEY}": "${LIVEKIT_SECRET}"
+turn:
+  enabled: true
+  domain: "${DOMAIN}"
+  cert_file: ""
+  key_file: ""
+  tls_port: 0
+  udp_port: 3478
+  external_tls: false
 # Logging
 logging:
   json: false
