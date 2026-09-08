@@ -10,8 +10,8 @@ http {
     gzip_min_length 1024;
     gzip_types text/plain text/css application/json application/javascript text/xml application/xml image/svg+xml;
 
-    # Docker internal DNS resolver (127.0.0.11) with upstream fallback
-    resolver 127.0.0.11 8.8.8.8 1.1.1.1 valid=300s;
+    # Docker internal DNS resolver (127.0.0.11)
+    resolver 127.0.0.11 valid=10s ipv6=off;
     resolver_timeout 5s;
 
     # SSL session caching - returning visitors skip the full handshake
@@ -419,8 +419,7 @@ http {
         }
 
         location / {
-            set $upstream_headscale http://headscale:8080;
-            proxy_pass $upstream_headscale;
+            proxy_pass http://headscale:8080;
             proxy_set_header Host $host;
             proxy_set_header X-Real-IP $remote_addr;
             proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;

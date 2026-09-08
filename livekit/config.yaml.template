@@ -6,11 +6,8 @@ rtc:
   port_range_start: 50000
   port_range_end: 50200
   use_external_ip: true
-  enable_dynacast: true
 audio:
   active_level: 40
-video:
-  adaptive_stream: true
 keys:
   "${LIVEKIT_KEY}": "${LIVEKIT_SECRET}"
 turn:
