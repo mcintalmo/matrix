@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from email.message import EmailMessage
 import logging
 import os
 import smtplib
+from email.message import EmailMessage
 from typing import Any
 
 from fastapi import BackgroundTasks, FastAPI, Request
@@ -27,7 +27,10 @@ SMTP_SERVER = os.environ.get("SMTP_SERVER", "smtp.gmail.com")
 SMTP_PORT = int(os.environ.get("SMTP_PORT", 587))
 SMTP_USER = os.environ.get("SMTP_USER") or os.environ.get("GMAIL_ACCOUNT", "")
 SMTP_PASS = os.environ.get("SMTP_PASS") or os.environ.get("GMAIL_APP_PASSWORD", "")
-TO_EMAIL = os.environ.get("RAGESHAKE_FORWARD_EMAIL") or os.environ.get("GMAIL_ACCOUNT", "rumpusroom.xyz@google.com")
+TO_EMAIL = (
+    os.environ.get("RAGESHAKE_FORWARD_EMAIL")
+    or os.environ.get("GMAIL_ACCOUNT", "rumpusroom.xyz@google.com")
+)
 
 
 def send_email(subject: str, body: str, attached_files: list[dict[str, Any]] | None = None) -> bool:
@@ -68,6 +71,27 @@ async def health_check() -> dict[str, str]:
 @app.post("/submit")
 @app.options("/submit")
 async def submit_rageshake(request: Request, background_tasks: BackgroundTasks) -> dict[str, str]:
+    content_type = request.headers.get("content-type", "")
+    if "application/json" in content_type:
+        try:
+            data = await request.json()
+            text = data.get("text", "No User Text Provided")
+            app_name = data.get("app", "Element Web/Call")
+            version = data.get("version", "Unknown Version")
+            body = (
+                f"Rageshake Bug Report Captured!\n\n"
+                f"App: {app_name}\n"
+                f"Version: {version}\n\n"
+                f"User Notes:\n{text}\n"
+            )
+            background_tasks.add_task(
+                send_email, f"[Rageshake] Bug Report from {app_name}", body, []
+            )
+            return {"report_url": "delivered"}
+        except Exception as json_error:
+            logger.error("Failed to parse JSON payload: %s", json_error)
+            return {"error": "Failed to parse rageshake payload"}
+
     try:
         # Element gracefully sends Rageshake crash logs as multipart/form-data
         form = await request.form()
@@ -98,22 +122,5 @@ async def submit_rageshake(request: Request, background_tasks: BackgroundTasks) 
         )
         return {"report_url": "delivered"}
     except Exception as form_error:
-        # Fallback if Element sends the payload as pure JSON
-        try:
-            data = await request.json()
-            text = data.get("text", "No User Text Provided")
-            app_name = data.get("app", "Element Web/Call")
-            version = data.get("version", "Unknown Version")
-            body = (
-                f"Rageshake Bug Report Captured!\n\n"
-                f"App: {app_name}\n"
-                f"Version: {version}\n\n"
-                f"User Notes:\n{text}\n"
-            )
-            background_tasks.add_task(
-                send_email, f"[Rageshake] Bug Report from {app_name}", body, []
-            )
-            return {"report_url": "delivered"}
-        except Exception as json_error:
-            logger.error("Failed to parse Rageshake payload: %s // %s", form_error, json_error)
-            return {"error": "Failed to parse rageshake payload"}
+        logger.error("Failed to parse form payload: %s", form_error)
+        return {"error": "Failed to parse rageshake payload"}

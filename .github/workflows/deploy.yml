@@ -57,8 +57,15 @@ jobs:
           mkdir -p synapse-data
           echo "${{ secrets.SYNAPSE_SIGNING_KEY }}" > synapse-data/${{ secrets.DOMAIN || 'rumpusroom.xyz' }}.signing.key
 
+      - name: Run Trivy vulnerability scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'fs'
+          ignore-unfixed: true
+          severity: 'CRITICAL,HIGH'
+
       - name: Make scripts executable
-        run: chmod +x scripts/matrix-ctl scripts/*.sh
+        run: chmod +x scripts/matrix-ctl scripts/*.sh host/iptables/*.sh host/certbot/*.sh
 
       - name: Pre-flight validation
         run: ./scripts/matrix-ctl check
@@ -75,6 +82,11 @@ jobs:
             --exclude '.vscode' \
             --exclude 'infra/' \
             ./ ubuntu@${{ secrets.SERVER_IP }}:/opt/matrix/app/
+
+      - name: Apply host-level security hardening
+        run: |
+          ssh ubuntu@${{ secrets.SERVER_IP }} \
+            "cd /opt/matrix/app && ./scripts/matrix-ctl harden-host"
 
       - name: Start / update containers
         run: |

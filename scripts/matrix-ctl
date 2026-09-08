@@ -173,7 +173,14 @@ cmd_render() {
         log_ok "Rendered telemetry/alertmanager.yml"
     fi
 
-    # 8. Nginx htpasswd for Grafana authentication
+    # 8. Headscale VPN config
+    if [ -f "$PROJECT_ROOT/headscale/config/config.yaml.template" ]; then
+        mkdir -p "$PROJECT_ROOT/headscale/config"
+        envsubst < "$PROJECT_ROOT/headscale/config/config.yaml.template" > "$PROJECT_ROOT/headscale/config/config.yaml"
+        log_ok "Rendered headscale/config/config.yaml"
+    fi
+
+    # 9. Nginx htpasswd for Grafana authentication
     mkdir -p "$PROJECT_ROOT/nginx"
     if [ -n "${SECRETS_POSTGRES_PASSWORD:-}" ]; then
         if command -v htpasswd >/dev/null 2>&1; then
@@ -416,6 +423,217 @@ EOSQL
     return 0
 }
 
+cmd_harden_host() {
+    log_info "Applying host-level security hardening..."
+
+    # 1. Enforce strict permissions on sensitive files and directories
+    log_info "Securing sensitive file permissions..."
+    chmod 700 "$PROJECT_ROOT" 2>/dev/null || true
+    if [ -f "$PROJECT_ROOT/.env" ]; then
+        chmod 600 "$PROJECT_ROOT/.env"
+        log_ok "Set 0600 on .env"
+    fi
+    if compgen -G "$PROJECT_ROOT/synapse-data/*signing.key" > /dev/null; then
+        chmod 600 "$PROJECT_ROOT"/synapse-data/*signing.key 2>/dev/null || true
+        log_ok "Set 0600 on synapse signing keys"
+    fi
+
+    # 2. Docker daemon hardening (userland-proxy: false, no-new-privileges: true)
+    if [ -f "$PROJECT_ROOT/host/docker/daemon.json" ]; then
+        log_info "Deploying /etc/docker/daemon.json..."
+        if [ -w /etc/docker ] || [ "$(id -u)" -eq 0 ]; then
+            mkdir -p /etc/docker
+            cp "$PROJECT_ROOT/host/docker/daemon.json" /etc/docker/daemon.json
+            systemctl reload docker 2>/dev/null || true
+            log_ok "Applied /etc/docker/daemon.json and reloaded Docker"
+        elif command -v sudo >/dev/null 2>&1; then
+            sudo mkdir -p /etc/docker
+            sudo cp "$PROJECT_ROOT/host/docker/daemon.json" /etc/docker/daemon.json
+            sudo systemctl reload docker 2>/dev/null || true
+            log_ok "Applied /etc/docker/daemon.json via sudo"
+        else
+            log_warn "Insufficient permissions to update /etc/docker/daemon.json"
+        fi
+    fi
+
+    # 3. Kernel sysctl hardening
+    if [ -f "$PROJECT_ROOT/host/sysctl/99-matrix-security.conf" ]; then
+        log_info "Deploying kernel sysctl hardening..."
+        if [ -w /etc/sysctl.d ] || [ "$(id -u)" -eq 0 ]; then
+            cp "$PROJECT_ROOT/host/sysctl/99-matrix-security.conf" /etc/sysctl.d/99-matrix-security.conf
+            sysctl -p /etc/sysctl.d/99-matrix-security.conf >/dev/null 2>&1 || true
+            log_ok "Applied sysctl hardening parameters"
+        elif command -v sudo >/dev/null 2>&1; then
+            sudo cp "$PROJECT_ROOT/host/sysctl/99-matrix-security.conf" /etc/sysctl.d/99-matrix-security.conf
+            sudo sysctl -p /etc/sysctl.d/99-matrix-security.conf >/dev/null 2>&1 || true
+            log_ok "Applied sysctl hardening parameters via sudo"
+        fi
+    fi
+
+    # 4. OpenSSH hardening (with syntax pre-check)
+    if [ -f "$PROJECT_ROOT/host/ssh/99-hardened.conf" ]; then
+        log_info "Validating OpenSSH hardening configuration..."
+        local ssh_dir="/etc/ssh/sshd_config.d"
+
+        if [ -d "$ssh_dir" ]; then
+            if command -v sshd >/dev/null 2>&1; then
+                if command -v sudo >/dev/null 2>&1; then
+                    sudo cp "$PROJECT_ROOT/host/ssh/99-hardened.conf" "$ssh_dir/99-hardened.conf"
+                    if sudo sshd -t >/dev/null 2>&1; then
+                        sudo systemctl reload ssh 2>/dev/null || sudo systemctl reload sshd 2>/dev/null || true
+                        log_ok "Applied OpenSSH hardening and reloaded SSH service"
+                    else
+                        log_error "sshd -t syntax check failed! Reverting 99-hardened.conf to prevent lockout."
+                        sudo rm -f "$ssh_dir/99-hardened.conf"
+                    fi
+                elif [ "$(id -u)" -eq 0 ]; then
+                    cp "$PROJECT_ROOT/host/ssh/99-hardened.conf" "$ssh_dir/99-hardened.conf"
+                    if sshd -t >/dev/null 2>&1; then
+                        systemctl reload ssh 2>/dev/null || systemctl reload sshd 2>/dev/null || true
+                        log_ok "Applied OpenSSH hardening and reloaded SSH service"
+                    else
+                        log_error "sshd -t syntax check failed! Reverting 99-hardened.conf to prevent lockout."
+                        rm -f "$ssh_dir/99-hardened.conf"
+                    fi
+                fi
+            fi
+        fi
+    fi
+
+    # 5. DOCKER-USER packet filtering
+    if [ -x "$PROJECT_ROOT/host/iptables/setup-docker-user.sh" ]; then
+        log_info "Configuring DOCKER-USER chain..."
+        if [ "$(id -u)" -eq 0 ]; then
+            "$PROJECT_ROOT/host/iptables/setup-docker-user.sh"
+        elif command -v sudo >/dev/null 2>&1; then
+            sudo "$PROJECT_ROOT/host/iptables/setup-docker-user.sh"
+        fi
+    fi
+
+    # 6. Certbot Nginx reload deploy hook
+    if [ -f "$PROJECT_ROOT/host/certbot/reload-nginx.sh" ]; then
+        log_info "Installing Certbot renewal deploy hook..."
+        local hook_dir="/etc/letsencrypt/renewal-hooks/deploy"
+        if [ -w /etc/letsencrypt ] || [ "$(id -u)" -eq 0 ]; then
+            mkdir -p "$hook_dir"
+            cp "$PROJECT_ROOT/host/certbot/reload-nginx.sh" "$hook_dir/reload-nginx.sh"
+            chmod +x "$hook_dir/reload-nginx.sh"
+            log_ok "Certbot reload hook installed in $hook_dir"
+        elif command -v sudo >/dev/null 2>&1; then
+            sudo mkdir -p "$hook_dir"
+            sudo cp "$PROJECT_ROOT/host/certbot/reload-nginx.sh" "$hook_dir/reload-nginx.sh"
+            sudo chmod +x "$hook_dir/reload-nginx.sh"
+            log_ok "Certbot reload hook installed via sudo"
+        fi
+    fi
+
+    # 7. Disable unnecessary network services (rpcbind)
+    log_info "Stopping and masking unneeded services (rpcbind)..."
+    if [ "$(id -u)" -eq 0 ]; then
+        systemctl stop rpcbind.service rpcbind.socket 2>/dev/null || true
+        systemctl disable rpcbind.service rpcbind.socket 2>/dev/null || true
+        systemctl mask rpcbind.service rpcbind.socket 2>/dev/null || true
+    elif command -v sudo >/dev/null 2>&1; then
+        sudo systemctl stop rpcbind.service rpcbind.socket 2>/dev/null || true
+        sudo systemctl disable rpcbind.service rpcbind.socket 2>/dev/null || true
+        sudo systemctl mask rpcbind.service rpcbind.socket 2>/dev/null || true
+    fi
+    log_ok "Unneeded services disabled"
+
+    # 8. Ensure unattended-upgrades is active for automatic daily security updates
+    log_info "Verifying automated security updates..."
+    if command -v unattended-upgrades >/dev/null 2>&1; then
+        if [ "$(id -u)" -eq 0 ]; then
+            systemctl enable unattended-upgrades 2>/dev/null || true
+            systemctl start unattended-upgrades 2>/dev/null || true
+        elif command -v sudo >/dev/null 2>&1; then
+            sudo systemctl enable unattended-upgrades 2>/dev/null || true
+            sudo systemctl start unattended-upgrades 2>/dev/null || true
+        fi
+        log_ok "Automated security updates active"
+    fi
+
+    log_ok "Host security hardening completed successfully."
+    return 0
+}
+
+cmd_audit() {
+    log_info "Running system security audit with Lynis..."
+    if ! command -v lynis >/dev/null 2>&1; then
+        log_info "Lynis not found. Attempting to install via apt..."
+        if command -v sudo >/dev/null 2>&1; then
+            sudo apt-get update -qq && sudo apt-get install -y lynis -qq
+        elif [ "$(id -u)" -eq 0 ]; then
+            apt-get update -qq && apt-get install -y lynis -qq
+        else
+            log_error "Lynis is not installed and cannot be installed without sudo."
+            return 1
+        fi
+    fi
+
+    log_info "Executing Lynis audit (quick mode)..."
+    if command -v sudo >/dev/null 2>&1; then
+        sudo lynis audit system --quick --warnings-only || true
+    elif [ "$(id -u)" -eq 0 ]; then
+        lynis audit system --quick --warnings-only || true
+    else
+        lynis audit system --quick --warnings-only || true
+    fi
+    log_ok "Lynis audit finished."
+    return 0
+}
+
+cmd_vpn() {
+    local subcmd="${1:-}"
+    shift || true
+
+    case "$subcmd" in
+        user|add-user)
+            local user="${1:-}"
+            if [ -z "$user" ]; then
+                log_error "Usage: matrix-ctl vpn add-user <username>"
+                return 1
+            fi
+            log_info "Creating Headscale user '$user'..."
+            docker compose -f "$PROJECT_ROOT/docker-compose.yml" exec -T headscale headscale users create "$user"
+            log_ok "Headscale user '$user' created."
+            ;;
+        key|create-key)
+            local user="${1:-}"
+            if [ -z "$user" ]; then
+                log_error "Usage: matrix-ctl vpn create-key <username_or_id>"
+                return 1
+            fi
+            local uid
+            if [[ "$user" =~ ^[0-9]+$ ]]; then
+                uid="$user"
+            else
+                uid="$(docker compose -f "$PROJECT_ROOT/docker-compose.yml" exec -T headscale headscale users list -o json 2>/dev/null | python3 -c "import sys, json; users = json.load(sys.stdin); print(next((str(u['id']) for u in users if u.get('name') == sys.argv[1]), ''))" "$user" 2>/dev/null || true)"
+            fi
+            if [ -z "$uid" ] || [ "$uid" = "null" ]; then
+                log_error "Could not find Headscale user: $user"
+                return 1
+            fi
+            log_info "Generating reusable pre-auth key for user '$user' (ID: $uid, 365 days)..."
+            docker compose -f "$PROJECT_ROOT/docker-compose.yml" exec -T headscale headscale preauthkeys create --user "$uid" --reusable --expiration 8760h
+            ;;
+        nodes|list-nodes)
+            docker compose -f "$PROJECT_ROOT/docker-compose.yml" exec -T headscale headscale nodes list
+            ;;
+        *)
+            cat <<EOF
+Usage: matrix-ctl vpn <subcommand> [args]
+
+Subcommands:
+  add-user <name>       Create a new VPN user
+  create-key <user>     Generate an authentication key for a user/device
+  list-nodes            List connected VPN devices
+EOF
+            return 1
+            ;;
+    esac
+}
+
 usage() {
     cat <<EOF
 Usage: matrix-ctl <command> [options]
@@ -431,6 +649,9 @@ Commands:
                               --username <USER>
                               --password <PASS>
                               --email <EMAIL> (optional)
+  harden-host               Apply Docker, kernel, SSH, DOCKER-USER firewall, and permissions hardening.
+  audit                     Run an automated Lynis security compliance audit.
+  vpn <subcommand>          Manage Headscale mesh VPN users, auth keys, and nodes.
   help                      Display this help documentation.
 
 EOF
@@ -456,6 +677,18 @@ case "${1:-}" in
     create-admin)
         shift
         cmd_create_admin "$@"
+        ;;
+    harden-host)
+        shift
+        cmd_harden_host "$@"
+        ;;
+    audit)
+        shift
+        cmd_audit "$@"
+        ;;
+    vpn)
+        shift
+        cmd_vpn "$@"
         ;;
     help|--help|-h)
         usage

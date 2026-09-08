@@ -53,6 +53,12 @@ variable "my_ip_cidr" {
 }
 
 # Instance Configuration
+variable "ubuntu_version" {
+  description = "Ubuntu OS version for the instance image (e.g., 24.04, 26.04)"
+  type        = string
+  default     = "24.04"
+}
+
 variable "instance_shape" {
   description = "OCI compute shape"
   type        = string

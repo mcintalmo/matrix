@@ -424,9 +424,11 @@ services:
     command: ["--config=/etc/otel-collector-config.yaml"]
     volumes:
       - ./telemetry/otel-collector-config.yaml:/etc/otel-collector-config.yaml:ro
-    ports:
-      - "4317:4317"
-      - "4318:4318"
+    expose:
+      - "4317"
+      - "4318"
+    security_opt:
+      - no-new-privileges:true
     networks:
       - backend
     deploy:
@@ -557,6 +559,36 @@ services:
           cpus: '0.1'
           memory: 64M
 
+  headscale:
+    image: headscale/headscale:latest
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "25m"
+        max-file: "3"
+    security_opt:
+      - no-new-privileges:true
+    volumes:
+      - ./headscale/config:/etc/headscale:ro
+      - headscale_data:/var/lib/headscale
+    command: serve
+    networks:
+      backend:
+        aliases:
+          - headscale.${DOMAIN}
+      egress:
+    healthcheck:
+      test: ["CMD", "headscale", "version"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: 128M
+
 volumes:
   synapse_data:
     driver: local
@@ -566,3 +598,4 @@ volumes:
     driver: local
   grafana_data:
   prometheus_data:
+  headscale_data:

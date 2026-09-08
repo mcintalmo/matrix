@@ -152,7 +152,7 @@ resource "oci_core_subnet" "matrix_subnet" {
 data "oci_core_images" "ubuntu_arm" {
   compartment_id           = var.compartment_ocid
   operating_system         = "Canonical Ubuntu"
-  operating_system_version = "22.04"
+  operating_system_version = var.ubuntu_version
   shape                    = "VM.Standard.A1.Flex"
   sort_by                  = "TIMECREATED"
   sort_order               = "DESC"

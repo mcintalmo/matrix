@@ -1,14 +1,17 @@
 events {}
 
 http {
+    # Security: Hide Nginx Version
+    server_tokens off;
+
     # Speed optimizations
     gzip on;
     gzip_vary on;
     gzip_min_length 1024;
     gzip_types text/plain text/css application/json application/javascript text/xml application/xml image/svg+xml;
 
-    # Docker internal DNS resolver (required for upstream hostname resolution and OCSP)
-    resolver 8.8.8.8 8.8.4.4 valid=300s;
+    # Docker internal DNS resolver (127.0.0.11) with upstream fallback
+    resolver 127.0.0.11 8.8.8.8 1.1.1.1 valid=300s;
     resolver_timeout 5s;
 
     # SSL session caching - returning visitors skip the full handshake
@@ -16,10 +19,16 @@ http {
     ssl_session_timeout 1d;
     ssl_session_tickets off;
 
+    # Rate Limiting Zones (Anti-Brute Force & Anti-DoS)
+    limit_req_zone $binary_remote_addr zone=auth_limit:10m rate=5r/m;
+    limit_req_zone $binary_remote_addr zone=rageshake_limit:10m rate=10r/m;
+    limit_req_zone $binary_remote_addr zone=api_burst:20m rate=30r/s;
+    limit_req_status 429;
+
     # Redirect all HTTP traffic to HTTPS
     server {
         listen 80;
-        server_name ${MATRIX_FQDN} ${DOMAIN} ${CHAT_FQDN} ${ELEMENT_WEB_FQDN} element.${DOMAIN} ${CALL_FQDN} ${ELEMENT_CALL_FQDN} ${LIVEKIT_FQDN};
+        server_name ${MATRIX_FQDN} ${DOMAIN} ${CHAT_FQDN} ${ELEMENT_WEB_FQDN} element.${DOMAIN} ${CALL_FQDN} ${ELEMENT_CALL_FQDN} ${LIVEKIT_FQDN} headscale.${DOMAIN};
 
         # ACME challenge for Let's Encrypt renewals
         location /.well-known/acme-challenge/ {
@@ -40,6 +49,12 @@ http {
         ssl_certificate_key /etc/letsencrypt/live/${MATRIX_FQDN}/privkey.pem;
         ssl_protocols TLSv1.2 TLSv1.3;
         ssl_prefer_server_ciphers on;
+
+        # Security Headers
+        add_header Strict-Transport-Security "max-age=31536000; includeSubDomains; preload" always;
+        add_header X-Content-Type-Options nosniff always;
+        add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+        add_header X-Frame-Options SAMEORIGIN always;
 
         # OCSP stapling - server pre-fetches cert status so browsers don't have to
         ssl_stapling on;
@@ -150,6 +165,7 @@ http {
 
         # ── Matrix Authentication Service (MAS) Routes ────────────────────────────
         location ~ ^/_matrix/client/(.*)/(login|logout|refresh|register) {
+            limit_req zone=auth_limit burst=5 nodelay;
             proxy_pass http://mas:8090;
             proxy_set_header X-Forwarded-For $remote_addr;
             proxy_set_header X-Forwarded-Proto $scheme;
@@ -158,6 +174,7 @@ http {
         }
 
         location ~ ^/(.well-known/openid-configuration|_auth|oauth2|upstream|graphql|assets)(/.*)?$ {
+            limit_req zone=auth_limit burst=10 nodelay;
             proxy_pass http://mas:8090;
             proxy_set_header X-Forwarded-For $remote_addr;
             proxy_set_header X-Forwarded-Proto $scheme;
@@ -185,6 +202,7 @@ http {
         
         # Element Web Rageshake / Crash Telemetry Interceptor
         location /_matrix/client/unstable/rageshake/submit {
+            limit_req zone=rageshake_limit burst=3 nodelay;
             proxy_pass http://rageshake-webhook:8000/submit;
             proxy_set_header X-Forwarded-For $remote_addr;
             proxy_set_header X-Forwarded-Proto $scheme;
@@ -202,6 +220,7 @@ http {
 
         # Synapse: Matrix client/federation API routes
         location /_matrix {
+            limit_req zone=api_burst burst=50 nodelay;
             proxy_pass http://synapse:8008;
             proxy_set_header X-Forwarded-For $remote_addr;
             proxy_set_header X-Forwarded-Proto $scheme;
@@ -264,6 +283,12 @@ http {
         ssl_protocols TLSv1.2 TLSv1.3;
         ssl_prefer_server_ciphers on;
 
+        # Security Headers
+        add_header Strict-Transport-Security "max-age=31536000; includeSubDomains; preload" always;
+        add_header X-Content-Type-Options nosniff always;
+        add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+        add_header X-Frame-Options SAMEORIGIN always;
+
         ssl_stapling on;
         ssl_stapling_verify on;
         ssl_trusted_certificate /etc/letsencrypt/live/${MATRIX_FQDN}/chain.pem;
@@ -299,6 +324,12 @@ http {
         ssl_certificate_key /etc/letsencrypt/live/${MATRIX_FQDN}/privkey.pem;
         ssl_protocols TLSv1.2 TLSv1.3;
         ssl_prefer_server_ciphers on;
+
+        # Security Headers
+        add_header Strict-Transport-Security "max-age=31536000; includeSubDomains; preload" always;
+        add_header X-Content-Type-Options nosniff always;
+        add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+        add_header X-Frame-Options SAMEORIGIN always;
 
         # ACME challenge for Let's Encrypt renewals (Cloudflare HTTPS Redirect bypass)
         location /.well-known/acme-challenge/ {
@@ -343,6 +374,12 @@ http {
         ssl_protocols TLSv1.2 TLSv1.3;
         ssl_prefer_server_ciphers on;
 
+        # Security Headers
+        add_header Strict-Transport-Security "max-age=31536000; includeSubDomains; preload" always;
+        add_header X-Content-Type-Options nosniff always;
+        add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+        add_header X-Frame-Options SAMEORIGIN always;
+
         # ACME challenge for Let's Encrypt renewals (Cloudflare HTTPS Redirect bypass)
         location /.well-known/acme-challenge/ {
             root /var/www/certbot;
@@ -357,6 +394,41 @@ http {
             proxy_http_version 1.1;
             proxy_set_header Upgrade $http_upgrade;
             proxy_set_header Connection "upgrade";
+        }
+    }
+
+    # Headscale VPN Coordination Server Block
+    server {
+        listen 443 ssl http2;
+        server_name headscale.${DOMAIN};
+
+        ssl_certificate /etc/letsencrypt/live/${MATRIX_FQDN}/fullchain.pem;
+        ssl_certificate_key /etc/letsencrypt/live/${MATRIX_FQDN}/privkey.pem;
+        ssl_protocols TLSv1.2 TLSv1.3;
+        ssl_prefer_server_ciphers on;
+
+        # Security Headers
+        add_header Strict-Transport-Security "max-age=31536000; includeSubDomains; preload" always;
+        add_header X-Content-Type-Options nosniff always;
+        add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+        add_header X-Frame-Options SAMEORIGIN always;
+
+        # ACME challenge for Let's Encrypt renewals
+        location /.well-known/acme-challenge/ {
+            root /var/www/certbot;
+        }
+
+        location / {
+            set $upstream_headscale http://headscale:8080;
+            proxy_pass $upstream_headscale;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto $scheme;
+            proxy_http_version 1.1;
+            proxy_set_header Upgrade $http_upgrade;
+            proxy_set_header Connection "upgrade";
+            proxy_read_timeout 86400;
         }
     }
 }

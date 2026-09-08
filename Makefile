@@ -1,4 +1,4 @@
-.PHONY: help check render update-ip deploy init-env setup-synapse setup-ssl tf-init tf-validate tf-fmt tf-plan tf-apply tf-destroy ssh logs status clean test lint
+.PHONY: help check render update-ip deploy init-env setup-synapse setup-ssl tf-init tf-validate tf-fmt tf-plan tf-apply tf-destroy ssh logs status clean test lint harden-host audit vpn-user vpn-key vpn-nodes
 
 # Variables
 TERRAFORM_DIR := infra
@@ -222,10 +222,10 @@ list-backups: ## List available backups in OCI (auto-detects local vs server)
 # ============================================================================
 
 test: ## Run unit tests with uv and pytest
-	@uv run pytest rageshake-webhook
+	@cd rageshake-webhook && uv run --extra dev pytest
 
 lint: ## Lint and check formatting with ruff
-	@uv run ruff check .
+	@cd rageshake-webhook && uv run --extra dev ruff check .
 
 test-health: ## Test Matrix health endpoints
 	@if [ "$(SERVER_IP)" = "not-deployed" ]; then \
@@ -263,6 +263,59 @@ test-element: ## Test Element frontend
 test-architecture: check-dns test-matrix test-element ## Complete architecture verification (DNS + endpoints)
 	@echo "--------------------------------------------------------"
 	@echo "[OK] Architecture verification complete"
+
+# ============================================================================
+# Security & VPN Management
+# ============================================================================
+
+harden-host: ## Apply host-level security hardening (Docker, sysctl, SSH, firewall)
+	@if [ "$(IS_SERVER)" = "true" ]; then \
+		./scripts/matrix-ctl harden-host; \
+	elif [ "$(SERVER_IP)" != "not-deployed" ]; then \
+		ssh -i ~/.ssh/id_ed25519 ubuntu@$(SERVER_IP) "cd /opt/matrix/app && ./scripts/matrix-ctl harden-host"; \
+	else \
+		echo "[ERROR] Server IP not available"; \
+		exit 1; \
+	fi
+
+audit: ## Run Lynis security audit on host
+	@if [ "$(IS_SERVER)" = "true" ]; then \
+		./scripts/matrix-ctl audit; \
+	elif [ "$(SERVER_IP)" != "not-deployed" ]; then \
+		ssh -i ~/.ssh/id_ed25519 ubuntu@$(SERVER_IP) "cd /opt/matrix/app && ./scripts/matrix-ctl audit"; \
+	else \
+		echo "[ERROR] Server IP not available"; \
+		exit 1; \
+	fi
+
+vpn-user: ## Create a new Headscale VPN user (make vpn-user USER=alice)
+	@if [ -z "$(USER)" ]; then \
+		echo "[ERROR] Please specify USER, e.g.: make vpn-user USER=alice"; \
+		exit 1; \
+	fi
+	@if [ "$(IS_SERVER)" = "true" ]; then \
+		./scripts/matrix-ctl vpn add-user $(USER); \
+	else \
+		ssh -i ~/.ssh/id_ed25519 ubuntu@$(SERVER_IP) "cd /opt/matrix/app && ./scripts/matrix-ctl vpn add-user $(USER)"; \
+	fi
+
+vpn-key: ## Generate reusable 365-day VPN auth key (make vpn-key USER=alice)
+	@if [ -z "$(USER)" ]; then \
+		echo "[ERROR] Please specify USER, e.g.: make vpn-key USER=alice"; \
+		exit 1; \
+	fi
+	@if [ "$(IS_SERVER)" = "true" ]; then \
+		./scripts/matrix-ctl vpn create-key $(USER); \
+	else \
+		ssh -i ~/.ssh/id_ed25519 ubuntu@$(SERVER_IP) "cd /opt/matrix/app && ./scripts/matrix-ctl vpn create-key $(USER)"; \
+	fi
+
+vpn-nodes: ## List connected Headscale VPN nodes
+	@if [ "$(IS_SERVER)" = "true" ]; then \
+		./scripts/matrix-ctl vpn list-nodes; \
+	else \
+		ssh -i ~/.ssh/id_ed25519 ubuntu@$(SERVER_IP) "cd /opt/matrix/app && ./scripts/matrix-ctl vpn list-nodes"; \
+	fi
 
 # ============================================================================
 # Cleanup

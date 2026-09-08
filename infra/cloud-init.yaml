@@ -9,6 +9,8 @@ packages:
   - iptables-persistent
   - fail2ban
   - certbot
+  - lynis
+  - unattended-upgrades
 
 package_update: true
 package_upgrade: true
@@ -53,8 +55,12 @@ runcmd:
 
   # 7. Setup unattended upgrades for security
   - echo "=== Configuring automatic security updates ==="
-  - apt-get install -y unattended-upgrades
+  - systemctl stop rpcbind.service rpcbind.socket 2>/dev/null || true
+  - systemctl disable rpcbind.service rpcbind.socket 2>/dev/null || true
+  - systemctl mask rpcbind.service rpcbind.socket 2>/dev/null || true
   - dpkg-reconfigure -plow unattended-upgrades
+  - systemctl enable unattended-upgrades
+  - systemctl start unattended-upgrades
 
   # 8. System optimization for Matrix
   - echo "=== System optimization ==="
