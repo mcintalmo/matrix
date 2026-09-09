@@ -2,10 +2,9 @@ name: Daily Security Updates & Audit
 # Daily automated job to verify unattended upgrades, install security patches, and run Lynis security audit
 
 on:
-  schedule:
-    # Run daily at 04:00 UTC
-    - cron: '0 4 * * *'
-  workflow_dispatch:  # Allow manual trigger
+  # Automated daily patching and Lynis audits execute natively on the VPS host via systemd timers and /etc/cron.daily/matrix-audit.
+  # Manual dispatch preserved for on-demand verification.
+  workflow_dispatch:
 
 jobs:
   security-audit:

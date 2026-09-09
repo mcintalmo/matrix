@@ -635,10 +635,10 @@ cmd_harden_host() {
             $SUDO_CMD cp "$PROJECT_ROOT/host/aide/70_aide_containers" /etc/aide/aide.conf.d/70_aide_containers
             $SUDO_CMD chmod 644 /etc/aide/aide.conf.d/70_aide_containers
         fi
-        if [ ! -f /var/lib/aide/aide.db ] && [ ! -f /var/lib/aide/aide.db.gz ]; then
+        if ! $SUDO_CMD test -f /var/lib/aide/aide.db && ! $SUDO_CMD test -f /var/lib/aide/aide.db.gz; then
             $SUDO_CMD aideinit -y -f >/dev/null 2>&1 || true
-            [ -f /var/lib/aide/aide.db.new ] && $SUDO_CMD cp /var/lib/aide/aide.db.new /var/lib/aide/aide.db || true
-            [ -f /var/lib/aide/aide.db.new.gz ] && $SUDO_CMD cp /var/lib/aide/aide.db.new.gz /var/lib/aide/aide.db.gz || true
+            $SUDO_CMD test -f /var/lib/aide/aide.db.new && $SUDO_CMD cp /var/lib/aide/aide.db.new /var/lib/aide/aide.db || true
+            $SUDO_CMD test -f /var/lib/aide/aide.db.new.gz && $SUDO_CMD cp /var/lib/aide/aide.db.new.gz /var/lib/aide/aide.db.gz || true
         fi
         if [ -f /etc/default/debsums ]; then
             $SUDO_CMD sed -i 's/^CRON_CHECK=.*/CRON_CHECK=yes/' /etc/default/debsums
@@ -655,6 +655,11 @@ cmd_harden_host() {
         if [ -n "$residual_pkgs" ]; then
             $SUDO_CMD dpkg --purge $residual_pkgs >/dev/null 2>&1 || true
             log_ok "Purged residual packages"
+        fi
+        if [ -f "$PROJECT_ROOT/host/cron/matrix-audit" ]; then
+            $SUDO_CMD cp "$PROJECT_ROOT/host/cron/matrix-audit" /etc/cron.daily/matrix-audit
+            $SUDO_CMD chmod 755 /etc/cron.daily/matrix-audit
+            log_ok "Installed daily Lynis audit cron job in /etc/cron.daily/matrix-audit"
         fi
         log_ok "Installed security monitoring utilities (sysstat, acct, rkhunter, aide, debsums, libpam-pwquality)"
     fi
