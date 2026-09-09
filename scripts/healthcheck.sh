@@ -4,6 +4,7 @@
 
 set -euo pipefail
 
+# shellcheck disable=SC2034
 ALERT_EMAIL="your-email@example.com"  # Configure this
 LOG_FILE="/var/log/matrix-health.log"
 
@@ -49,7 +50,8 @@ check_postgres() {
 
 # Check 4: Disk space (alert if >85%)
 check_disk_space() {
-  local usage=$(df / | tail -1 | awk '{print $5}' | sed 's/%//')
+  local usage
+  usage=$(df / | tail -1 | awk '{print $5}' | sed 's/%//')
   if [ "${usage}" -gt 85 ]; then
     alert "Disk space critical: ${usage}% used!"
     return 1
@@ -59,7 +61,8 @@ check_disk_space() {
 
 # Check 5: Memory usage
 check_memory() {
-  local mem_used=$(free | grep Mem | awk '{print int($3/$2 * 100)}')
+  local mem_used
+  mem_used=$(free | grep Mem | awk '{print int($3/$2 * 100)}')
   if [ "${mem_used}" -gt 90 ]; then
     alert "Memory usage critical: ${mem_used}%!"
     return 1

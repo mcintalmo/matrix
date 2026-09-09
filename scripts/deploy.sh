@@ -40,13 +40,13 @@ deploy_from_github() {
     
     # Create deploy directory if it doesn't exist
     sudo mkdir -p "$SERVER_DEPLOY_DIR"
-    sudo chown -R $USER:$USER "$SERVER_DEPLOY_DIR"
+    sudo chown -R "$USER:$USER" "$SERVER_DEPLOY_DIR"
     
     if [ -d "$SERVER_DEPLOY_DIR/.git" ]; then
         echo "Repository exists, pulling latest changes..."
         cd "$SERVER_DEPLOY_DIR"
         git fetch origin
-        git reset --hard origin/$GITHUB_BRANCH
+        git reset --hard "origin/$GITHUB_BRANCH"
         echo "[OK] Updated to latest version"
     else
         echo "Cloning repository..."

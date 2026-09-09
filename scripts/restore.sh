@@ -86,7 +86,7 @@ echo "Selected backup: $SELECTED"
 
 # ── Confirm ───────────────────────────────────────────────────────────────────
 echo ""
-read -p "[WARN] This will STOP all containers and overwrite the database. Continue? (yes/no): " CONFIRM
+read -r -p "[WARN] This will STOP all containers and overwrite the database. Continue? (yes/no): " CONFIRM
 if [ "$CONFIRM" != "yes" ]; then
   echo "Aborted."
   exit 0

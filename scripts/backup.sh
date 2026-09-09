@@ -29,7 +29,7 @@ cd "$APP_DIR"
 # 1. Postgres full dump (all databases: synapse + mas)
 echo "Dumping PostgreSQL..."
 docker compose exec -T postgres pg_dumpall -U postgres | gzip > "$BACKUP_DIR/postgres.sql.gz"
-echo "  [OK] Postgres: $(du -sh $BACKUP_DIR/postgres.sql.gz | cut -f1)"
+echo "  [OK] Postgres: $(du -sh "$BACKUP_DIR/postgres.sql.gz" | cut -f1)"
 
 # 2. Synapse media store
 echo "Archiving media store..."
@@ -43,7 +43,7 @@ if docker volume inspect "$SYNAPSE_VOL" >/dev/null 2>&1; then
     bash -c "if [ -d /data/media_store ]; then tar -czf /backup/media.tar.gz -C /data media_store; fi"
   
   if [ -f "$BACKUP_DIR/media.tar.gz" ]; then
-    echo "  [OK] Media: $(du -sh $BACKUP_DIR/media.tar.gz | cut -f1)"
+    echo "  [OK] Media: $(du -sh "$BACKUP_DIR/media.tar.gz" | cut -f1)"
   else
     echo "  [WARN] No media_store found inside volume, skipping"
   fi

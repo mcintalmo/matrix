@@ -9,10 +9,14 @@ echo "║  SSL Certificate Setup - Matrix & Element               ║"
 echo "╚══════════════════════════════════════════════════════════╝"
 echo ""
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 # Load environment variables if available
 if [ -f "/opt/matrix/app/.env" ]; then
+    # shellcheck disable=SC1091
     set -a && source "/opt/matrix/app/.env" && set +a
 elif [ -f "$SCRIPT_DIR/../.env" ]; then
+    # shellcheck disable=SC1091
     set -a && source "$SCRIPT_DIR/../.env" && set +a
 fi
 
@@ -73,9 +77,9 @@ if [ -d "/etc/letsencrypt/live/$MATRIX_FQDN" ]; then
         echo "Aborted"
         exit 0
     fi
-    CERTBOT_ACTION="certonly --expand"
+    CERTBOT_ACTION=(certonly --expand)
 else
-    CERTBOT_ACTION="certonly"
+    CERTBOT_ACTION=(certonly)
 fi
 
 # Stop nginx to free port 80
@@ -107,18 +111,19 @@ for d in "${RESOLVED_DOMAINS[@]}"; do
     CERTBOT_DOMAIN_FLAGS+=("-d" "$d")
 done
 
+EMAIL_FLAGS=()
 if [ -n "$EMAIL" ]; then
-    EMAIL_FLAG="--email $EMAIL"
+    EMAIL_FLAGS=(--email "$EMAIL")
 else
-    EMAIL_FLAG="--register-unsafely-without-email"
+    EMAIL_FLAGS=(--register-unsafely-without-email)
 fi
 
-sudo certbot $CERTBOT_ACTION \
+sudo certbot "${CERTBOT_ACTION[@]}" \
     --standalone \
     "${CERTBOT_DOMAIN_FLAGS[@]}" \
     --non-interactive \
     --agree-tos \
-    $EMAIL_FLAG || {
+    "${EMAIL_FLAGS[@]}" || {
         echo ""
         echo "[ERROR] Certificate generation failed!"
         echo ""

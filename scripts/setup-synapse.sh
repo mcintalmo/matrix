@@ -31,7 +31,7 @@ echo "Current ownership: $CURRENT_OWNER"
 
 # Set correct ownership
 echo "Setting ownership to $SYNAPSE_UID:$SYNAPSE_GID..."
-sudo chown -R $SYNAPSE_UID:$SYNAPSE_GID "$SYNAPSE_DATA_DIR"
+sudo chown -R "$SYNAPSE_UID:$SYNAPSE_GID" "$SYNAPSE_DATA_DIR"
 
 # Set permissions
 sudo chmod 750 "$SYNAPSE_DATA_DIR"
@@ -73,7 +73,7 @@ if [ ! -f "$SYNAPSE_DATA_DIR/homeserver.yaml" ]; then
     
     # Fix ownership again (generation might create files as root)
     echo "Fixing ownership after generation..."
-    sudo chown -R $SYNAPSE_UID:$SYNAPSE_GID "$SYNAPSE_DATA_DIR"
+    sudo chown -R "$SYNAPSE_UID:$SYNAPSE_GID" "$SYNAPSE_DATA_DIR"
     echo "[OK] Ownership fixed"
 else
     echo "[OK] Homeserver config already exists at $SYNAPSE_DATA_DIR/homeserver.yaml"
@@ -82,6 +82,7 @@ fi
 # Verify final permissions
 echo ""
 echo "Final verification:"
+# shellcheck disable=SC2012
 ls -la "$SYNAPSE_DATA_DIR" | head -5
 echo ""
 echo "[OK] Synapse data directory is ready!"
