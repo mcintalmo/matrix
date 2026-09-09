@@ -12,19 +12,24 @@ jobs:
     name: Security Patching & Audit
     runs-on: ubuntu-latest
 
+    env:
+      SERVER_IP: ${{ secrets.SERVER_IP }}
+      SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+      HEADSCALE_PREAUTH_KEY: ${{ secrets.HEADSCALE_PREAUTH_KEY }}
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Connect to Headscale Mesh VPN
-        if: "${{ secrets.HEADSCALE_PREAUTH_KEY != '' }}"
+        if: env.HEADSCALE_PREAUTH_KEY != ''
         uses: tailscale/github-action@v2
         with:
           authkey: ${{ secrets.HEADSCALE_PREAUTH_KEY }}
           args: --login-server=https://headscale.rumpusroom.xyz --accept-routes
 
       - name: Set up SSH key
-        if: "${{ secrets.SSH_PRIVATE_KEY != '' && secrets.SERVER_IP != '' }}"
+        if: env.SSH_PRIVATE_KEY != '' && env.SERVER_IP != ''
         run: |
           mkdir -p ~/.ssh
           echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_ed25519
@@ -32,13 +37,13 @@ jobs:
           ssh-keyscan -H ${{ secrets.SERVER_IP }} >> ~/.ssh/known_hosts
 
       - name: Apply security updates via unattended-upgrades
-        if: "${{ secrets.SSH_PRIVATE_KEY != '' && secrets.SERVER_IP != '' }}"
+        if: env.SSH_PRIVATE_KEY != '' && env.SERVER_IP != ''
         run: |
           ssh ubuntu@${{ secrets.SERVER_IP }} \
             "sudo unattended-upgrade -d 2>/dev/null || true"
 
       - name: Run automated Lynis security audit
-        if: "${{ secrets.SSH_PRIVATE_KEY != '' && secrets.SERVER_IP != '' }}"
+        if: env.SSH_PRIVATE_KEY != '' && env.SERVER_IP != ''
         run: |
           ssh ubuntu@${{ secrets.SERVER_IP }} \
             "cd /opt/matrix/app && ./scripts/matrix-ctl audit"
