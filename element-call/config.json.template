@@ -13,6 +13,10 @@
   "skipLobby": true,
   "defaultAudioEnabled": true,
   "defaultVideoEnabled": false,
+  "media_devices": {
+    "enable_audio": true,
+    "enable_video": false
+  },
   "intent": "audio",
   "e2eEnabled": true,
   "perParticipantE2EE": true,

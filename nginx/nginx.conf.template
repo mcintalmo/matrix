@@ -308,6 +308,19 @@ http {
             root /var/www/certbot;
         }
 
+        # Mute video by default for embedded Element Call widget in call rooms
+        location ^~ /widgets/element-call/assets/ {
+            proxy_pass http://element-web:80;
+            proxy_set_header X-Forwarded-For $remote_addr;
+            proxy_set_header X-Forwarded-Proto $scheme;
+            proxy_set_header Host $host;
+            proxy_set_header Accept-Encoding "";
+            sub_filter 'l.defaultAudioEnabled=!0,l.defaultVideoEnabled=!0;' 'l.defaultAudioEnabled=!0,l.defaultVideoEnabled=!1;';
+            sub_filter_once on;
+            sub_filter_types application/javascript text/javascript;
+            add_header Cache-Control "no-cache, no-store, must-revalidate";
+        }
+
         location ~* \.(js|css|woff2|woff|ttf|ico|png|svg|jpg|webp)$ {
             proxy_pass http://element-web:80;
             proxy_set_header X-Forwarded-For $remote_addr;
@@ -363,6 +376,19 @@ http {
         location /rtc {
             # Legacy stub mapping to gently migrate client cache over
             return 301 https://${LIVEKIT_FQDN}/rtc;
+        }
+
+        # Mute video by default for Element Call
+        location ^~ /assets/ {
+            proxy_pass http://element-call:8080;
+            proxy_set_header X-Forwarded-For $remote_addr;
+            proxy_set_header X-Forwarded-Proto $scheme;
+            proxy_set_header Host $host;
+            proxy_set_header Accept-Encoding "";
+            sub_filter 'videoEnabled:e!="audio"' 'videoEnabled:!1&&e!="a"';
+            sub_filter_once on;
+            sub_filter_types application/javascript text/javascript;
+            add_header Cache-Control "no-cache, no-store, must-revalidate";
         }
 
         location / {
