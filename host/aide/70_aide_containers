@@ -1,0 +1,3 @@
+# Ignore container overlays and dynamic container filesystems for host file integrity checks
+!/var/lib/docker($|/)
+!/var/lib/containerd($|/)

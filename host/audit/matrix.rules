@@ -1,0 +1,34 @@
+# Linux Audit framework rules for Matrix production host (ACCT-9628)
+# Remove all existing rules
+-D
+
+# Buffer size
+-b 8192
+
+# Failure mode (1 = printk, 2 = panic)
+-f 1
+
+# Monitor identity and user account files
+-w /etc/passwd -p wa -k identity
+-w /etc/group -p wa -k identity
+-w /etc/shadow -p wa -k identity
+-w /etc/gshadow -p wa -k identity
+-w /etc/security/opasswd -p wa -k identity
+
+# Monitor sudoers and authorization
+-w /etc/sudoers -p wa -k sudoers
+-w /etc/sudoers.d/ -p wa -k sudoers
+
+# Monitor system calls for time modifications
+-a always,exit -F arch=b64 -S adjtimex,settimeofday -k time-change
+-a always,exit -F arch=b64 -S clock_settime -k time-change
+
+# Monitor network environment changes
+-a always,exit -F arch=b64 -S sethostname,setdomainname -k system-locale
+-w /etc/issue -p wa -k system-locale
+-w /etc/issue.net -p wa -k system-locale
+-w /etc/hosts -p wa -k system-locale
+-w /etc/network/ -p wa -k system-locale
+
+# Monitor Docker configuration
+-w /etc/docker/daemon.json -p wa -k docker-config

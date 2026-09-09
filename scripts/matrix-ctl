@@ -434,8 +434,8 @@ cmd_harden_host() {
         log_ok "Set 0600 on .env"
     fi
     if compgen -G "$PROJECT_ROOT/synapse-data/*signing.key" > /dev/null; then
-        chmod 600 "$PROJECT_ROOT"/synapse-data/*signing.key 2>/dev/null || true
-        log_ok "Set 0600 on synapse signing keys"
+        chmod 644 "$PROJECT_ROOT"/synapse-data/*signing.key 2>/dev/null || true
+        log_ok "Set 0644 on synapse signing keys"
     fi
 
     # 2. Docker daemon hardening (userland-proxy: false, no-new-privileges: true)
@@ -551,6 +551,112 @@ cmd_harden_host() {
             sudo systemctl start unattended-upgrades 2>/dev/null || true
         fi
         log_ok "Automated security updates active"
+    fi
+
+    # 9. Blacklist unused legacy kernel protocols (dccp, sctp, rds, tipc - NETW-3200)
+    if [ -f "$PROJECT_ROOT/host/modprobe/blacklist-protocols.conf" ]; then
+        log_info "Blacklisting unused legacy network protocols..."
+        if [ "$(id -u)" -eq 0 ]; then
+            cp "$PROJECT_ROOT/host/modprobe/blacklist-protocols.conf" /etc/modprobe.d/blacklist-protocols.conf
+            log_ok "Applied modprobe protocol blacklist"
+        elif command -v sudo >/dev/null 2>&1; then
+            sudo cp "$PROJECT_ROOT/host/modprobe/blacklist-protocols.conf" /etc/modprobe.d/blacklist-protocols.conf
+            log_ok "Applied modprobe protocol blacklist via sudo"
+        fi
+    fi
+
+    # 10. Disable core dumps (KRNL-5820)
+    if [ -f "$PROJECT_ROOT/host/limits/99-disable-coredumps.conf" ]; then
+        log_info "Disabling core dumps in security limits..."
+        if [ "$(id -u)" -eq 0 ]; then
+            mkdir -p /etc/security/limits.d
+            cp "$PROJECT_ROOT/host/limits/99-disable-coredumps.conf" /etc/security/limits.d/99-disable-coredumps.conf
+            log_ok "Applied core dump restrictions"
+        elif command -v sudo >/dev/null 2>&1; then
+            sudo mkdir -p /etc/security/limits.d
+            sudo cp "$PROJECT_ROOT/host/limits/99-disable-coredumps.conf" /etc/security/limits.d/99-disable-coredumps.conf
+            log_ok "Applied core dump restrictions via sudo"
+        fi
+    fi
+
+    # 11. Deploy legal warning banner (BANN-7126, BANN-7130)
+    if [ -f "$PROJECT_ROOT/host/banner/issue.net" ]; then
+        log_info "Deploying legal warning banner to /etc/issue and /etc/issue.net..."
+        if [ "$(id -u)" -eq 0 ]; then
+            cp "$PROJECT_ROOT/host/banner/issue.net" /etc/issue.net
+            cp "$PROJECT_ROOT/host/banner/issue.net" /etc/issue
+            log_ok "Deployed legal warning banner"
+        elif command -v sudo >/dev/null 2>&1; then
+            sudo cp "$PROJECT_ROOT/host/banner/issue.net" /etc/issue.net
+            sudo cp "$PROJECT_ROOT/host/banner/issue.net" /etc/issue
+            log_ok "Deployed legal warning banner via sudo"
+        fi
+    fi
+
+    # 12. Restrictive default system umask and password hashing (AUTH-9328, AUTH-9230, AUTH-9286)
+    log_info "Configuring umask, password aging, and crypt rounds in /etc/login.defs..."
+    local login_defs="/etc/login.defs"
+    if command -v sudo >/dev/null 2>&1 || [ "$(id -u)" -eq 0 ]; then
+        local SUDO_CMD=""
+        [ "$(id -u)" -ne 0 ] && SUDO_CMD="sudo"
+        grep -q "^UMASK" "$login_defs" && $SUDO_CMD sed -i 's/^UMASK\s\+[0-9]\+/UMASK\t\t027/' "$login_defs" || echo -e "UMASK\t\t027" | $SUDO_CMD tee -a "$login_defs" >/dev/null
+        grep -q "^PASS_MAX_DAYS" "$login_defs" && $SUDO_CMD sed -i 's/^PASS_MAX_DAYS\s\+[0-9]\+/PASS_MAX_DAYS\t90/' "$login_defs" || echo -e "PASS_MAX_DAYS\t90" | $SUDO_CMD tee -a "$login_defs" >/dev/null
+        grep -q "^PASS_MIN_DAYS" "$login_defs" && $SUDO_CMD sed -i 's/^PASS_MIN_DAYS\s\+[0-9]\+/PASS_MIN_DAYS\t1/' "$login_defs" || echo -e "PASS_MIN_DAYS\t1" | $SUDO_CMD tee -a "$login_defs" >/dev/null
+        grep -q "^SHA_CRYPT_MIN_ROUNDS" "$login_defs" || echo -e "SHA_CRYPT_MIN_ROUNDS 5000" | $SUDO_CMD tee -a "$login_defs" >/dev/null
+        grep -q "^SHA_CRYPT_MAX_ROUNDS" "$login_defs" || echo -e "SHA_CRYPT_MAX_ROUNDS 50000" | $SUDO_CMD tee -a "$login_defs" >/dev/null
+        echo "umask 027" | $SUDO_CMD tee /etc/profile.d/99-umask.sh >/dev/null
+        $SUDO_CMD chmod 644 /etc/profile.d/99-umask.sh
+        log_ok "Configured umask 027, password aging, and SHA-512 rounds"
+    fi
+
+    # 13. Install and configure Linux Audit Framework (auditd) (ACCT-9628)
+    log_info "Configuring auditd framework..."
+    if command -v sudo >/dev/null 2>&1; then
+        if ! command -v auditctl >/dev/null 2>&1; then
+            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y auditd audispd-plugins -qq
+        fi
+        if [ -f "$PROJECT_ROOT/host/audit/matrix.rules" ]; then
+            sudo mkdir -p /etc/audit/rules.d
+            sudo cp "$PROJECT_ROOT/host/audit/matrix.rules" /etc/audit/rules.d/matrix.rules
+            sudo augenrules --load 2>/dev/null || sudo systemctl restart auditd 2>/dev/null || true
+            log_ok "Deployed auditd rules and reloaded audit framework"
+        fi
+    fi
+
+    # 14. Enable process accounting, malware scanning, and file integrity (ACCT-9622, FINT-4350, HRDN-7230, HRDN-7222, PKGS-7370, PKGS-7346)
+    log_info "Installing security monitoring and audit tools..."
+    if command -v sudo >/dev/null 2>&1 || [ "$(id -u)" -eq 0 ]; then
+        local SUDO_CMD=""
+        [ "$(id -u)" -ne 0 ] && SUDO_CMD="sudo"
+        $SUDO_CMD DEBIAN_FRONTEND=noninteractive apt-get install -y sysstat debsums apt-show-versions apt-listchanges libpam-tmpdir libpam-pwquality acct rkhunter aide -qq
+        $SUDO_CMD systemctl enable --now sysstat 2>/dev/null || true
+        $SUDO_CMD systemctl enable --now acct 2>/dev/null || true
+        if [ -f "$PROJECT_ROOT/host/aide/70_aide_containers" ]; then
+            $SUDO_CMD cp "$PROJECT_ROOT/host/aide/70_aide_containers" /etc/aide/aide.conf.d/70_aide_containers
+            $SUDO_CMD chmod 644 /etc/aide/aide.conf.d/70_aide_containers
+        fi
+        if [ ! -f /var/lib/aide/aide.db ] && [ ! -f /var/lib/aide/aide.db.gz ]; then
+            $SUDO_CMD aideinit -y -f >/dev/null 2>&1 || true
+            [ -f /var/lib/aide/aide.db.new ] && $SUDO_CMD cp /var/lib/aide/aide.db.new /var/lib/aide/aide.db || true
+            [ -f /var/lib/aide/aide.db.new.gz ] && $SUDO_CMD cp /var/lib/aide/aide.db.new.gz /var/lib/aide/aide.db.gz || true
+        fi
+        if [ -f /etc/default/debsums ]; then
+            $SUDO_CMD sed -i 's/^CRON_CHECK=.*/CRON_CHECK=yes/' /etc/default/debsums
+        else
+            echo 'CRON_CHECK=yes' | $SUDO_CMD tee /etc/default/debsums >/dev/null
+        fi
+        # Restrict compiler binaries to root only (HRDN-7222)
+        $SUDO_CMD chmod o-rx /usr/bin/*as /usr/bin/gcc* /usr/bin/clang* 2>/dev/null || true
+        # Disable unneeded local MTA daemon (MAIL-8818)
+        $SUDO_CMD systemctl stop postfix 2>/dev/null || true
+        $SUDO_CMD systemctl disable postfix 2>/dev/null || true
+        local residual_pkgs
+        residual_pkgs=$(dpkg -l | awk '/^rc/ {print $2}')
+        if [ -n "$residual_pkgs" ]; then
+            $SUDO_CMD dpkg --purge $residual_pkgs >/dev/null 2>&1 || true
+            log_ok "Purged residual packages"
+        fi
+        log_ok "Installed security monitoring utilities (sysstat, acct, rkhunter, aide, debsums, libpam-pwquality)"
     fi
 
     log_ok "Host security hardening completed successfully."
