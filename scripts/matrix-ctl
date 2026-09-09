@@ -132,6 +132,7 @@ cmd_render() {
 
     # 2. Nginx configuration (strictly scoped to avoid wiping Nginx internal variables like $host)
     if [ -f "$PROJECT_ROOT/nginx/nginx.conf.template" ]; then
+        # shellcheck disable=SC2016
         envsubst '${DOMAIN} ${MATRIX_FQDN} ${ELEMENT_WEB_FQDN} ${ELEMENT_CALL_FQDN} ${LIVEKIT_FQDN} ${CHAT_FQDN} ${CALL_FQDN}' \
             < "$PROJECT_ROOT/nginx/nginx.conf.template" > "$PROJECT_ROOT/nginx/nginx.conf"
         log_ok "Rendered nginx/nginx.conf (scoped variables preserved)"
@@ -140,7 +141,8 @@ cmd_render() {
     # 3. MAS configuration (requires indented signing key if present)
     if [ -f "$PROJECT_ROOT/mas/config.yaml.template" ]; then
         if [ -n "${MAS_SIGNING_KEY:-}" ]; then
-            export MAS_SIGNING_KEY_INDENTED="$(echo "$MAS_SIGNING_KEY" | awk '{print "        " $0}')"
+            MAS_SIGNING_KEY_INDENTED="$(echo "$MAS_SIGNING_KEY" | awk '{print "        " $0}')"
+            export MAS_SIGNING_KEY_INDENTED
         else
             export MAS_SIGNING_KEY_INDENTED=""
         fi
@@ -599,9 +601,21 @@ cmd_harden_host() {
     if command -v sudo >/dev/null 2>&1 || [ "$(id -u)" -eq 0 ]; then
         local SUDO_CMD=""
         [ "$(id -u)" -ne 0 ] && SUDO_CMD="sudo"
-        grep -q "^UMASK" "$login_defs" && $SUDO_CMD sed -i 's/^UMASK\s\+[0-9]\+/UMASK\t\t027/' "$login_defs" || echo -e "UMASK\t\t027" | $SUDO_CMD tee -a "$login_defs" >/dev/null
-        grep -q "^PASS_MAX_DAYS" "$login_defs" && $SUDO_CMD sed -i 's/^PASS_MAX_DAYS\s\+[0-9]\+/PASS_MAX_DAYS\t90/' "$login_defs" || echo -e "PASS_MAX_DAYS\t90" | $SUDO_CMD tee -a "$login_defs" >/dev/null
-        grep -q "^PASS_MIN_DAYS" "$login_defs" && $SUDO_CMD sed -i 's/^PASS_MIN_DAYS\s\+[0-9]\+/PASS_MIN_DAYS\t1/' "$login_defs" || echo -e "PASS_MIN_DAYS\t1" | $SUDO_CMD tee -a "$login_defs" >/dev/null
+        if grep -q "^UMASK" "$login_defs"; then
+            $SUDO_CMD sed -i 's/^UMASK\s\+[0-9]\+/UMASK\t\t027/' "$login_defs"
+        else
+            echo -e "UMASK\t\t027" | $SUDO_CMD tee -a "$login_defs" >/dev/null
+        fi
+        if grep -q "^PASS_MAX_DAYS" "$login_defs"; then
+            $SUDO_CMD sed -i 's/^PASS_MAX_DAYS\s\+[0-9]\+/PASS_MAX_DAYS\t90/' "$login_defs"
+        else
+            echo -e "PASS_MAX_DAYS\t90" | $SUDO_CMD tee -a "$login_defs" >/dev/null
+        fi
+        if grep -q "^PASS_MIN_DAYS" "$login_defs"; then
+            $SUDO_CMD sed -i 's/^PASS_MIN_DAYS\s\+[0-9]\+/PASS_MIN_DAYS\t1/' "$login_defs"
+        else
+            echo -e "PASS_MIN_DAYS\t1" | $SUDO_CMD tee -a "$login_defs" >/dev/null
+        fi
         grep -q "^SHA_CRYPT_MIN_ROUNDS" "$login_defs" || echo -e "SHA_CRYPT_MIN_ROUNDS 5000" | $SUDO_CMD tee -a "$login_defs" >/dev/null
         grep -q "^SHA_CRYPT_MAX_ROUNDS" "$login_defs" || echo -e "SHA_CRYPT_MAX_ROUNDS 50000" | $SUDO_CMD tee -a "$login_defs" >/dev/null
         echo "umask 027" | $SUDO_CMD tee /etc/profile.d/99-umask.sh >/dev/null
@@ -653,6 +667,7 @@ cmd_harden_host() {
         local residual_pkgs
         residual_pkgs=$(dpkg -l | awk '/^rc/ {print $2}')
         if [ -n "$residual_pkgs" ]; then
+            # shellcheck disable=SC2086
             $SUDO_CMD dpkg --purge $residual_pkgs >/dev/null 2>&1 || true
             log_ok "Purged residual packages"
         fi

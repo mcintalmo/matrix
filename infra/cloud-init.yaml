@@ -71,7 +71,7 @@ runcmd:
 
   # 9. Create status file for monitoring
   - echo "cloud-init completed at $(date)" > /opt/matrix/cloud-init-complete
-  
+
   # 10. Final verification
   - echo "=== Verifying Services ==="
   - systemctl is-active docker || echo "WARNING: Docker not running"
@@ -94,21 +94,21 @@ write_files:
   - path: /opt/matrix/README.txt
     content: |
       Matrix Synapse Server - Deployment Instructions
-      
+
       1. Clone your repository:
          git clone <your-repo> /opt/matrix/app
-      
+
       2. Navigate to the directory:
          cd /opt/matrix/app
-      
+
       3. Create .env file with secrets
-      
+
       4. Start services:
          docker compose up -d
-      
+
       5. Check logs:
          docker compose logs -f
-      
+
       For SSL setup:
          sudo certbot --nginx -d matrix.rumpusroom.xyz
 
@@ -116,13 +116,13 @@ final_message: |
   ═══════════════════════════════════════════════════════════════
   Matrix Server Initialization Complete!
   ═══════════════════════════════════════════════════════════════
-  
+
   Docker: Installed and running
   Docker Compose: Installed
   Firewall: Configured
   fail2ban: Enabled
-  
+
   Next: Deploy your Matrix Synapse application to /opt/matrix
-  
+
   Cloud-init log: /var/log/cloud-init-output.log
   ═══════════════════════════════════════════════════════════════
