@@ -29,10 +29,12 @@
     },
     "setting_defaults": {
         "breadcrumbs": true,
+        "videoInputMuted": true,
+        "audioInputMuted": false,
         "Voice.use_webrtc_for_video_rooms": true,
         "im.vector.web.voice_video_settings": {
             "audioInput": true,
-            "videoInput": null
+            "videoInput": false
         },
         "io.element.video_rooms": {
             "defaultAudioEnabled": true,
@@ -41,8 +43,8 @@
         }
     },
     "element_call": {
-        "url": "https://${CALL_FQDN}?skipLobby=true&defaultVideoEnabled=false",
-        "guest_spa_url": "https://${CALL_FQDN}?skipLobby=true&defaultVideoEnabled=false"
+        "url": "https://${CALL_FQDN}?skipLobby=true&intent=audio",
+        "guest_spa_url": "https://${CALL_FQDN}?skipLobby=true&intent=audio"
     },
     "livekit": {
         "livekit_service_url": "https://${CALL_FQDN}/jwt"

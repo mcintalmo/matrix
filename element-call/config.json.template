@@ -13,6 +13,7 @@
   "skipLobby": true,
   "defaultAudioEnabled": true,
   "defaultVideoEnabled": false,
+  "intent": "audio",
   "e2eEnabled": true,
   "perParticipantE2EE": true,
   "rageshakeSubmitUrl": "https://${MATRIX_FQDN}/_matrix/client/unstable/rageshake/submit"
