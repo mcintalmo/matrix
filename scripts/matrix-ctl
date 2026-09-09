@@ -225,6 +225,7 @@ cmd_status() {
     local mas_health="unreachable"
     local webhook_health="unreachable"
     local postgres_health="unreachable"
+    local nginx_health="unreachable"
 
     local pg_user="${POSTGRES_USER:-postgres}"
     if command -v docker >/dev/null 2>&1; then
@@ -240,6 +241,17 @@ cmd_status() {
         if docker compose ps rageshake-webhook 2>/dev/null | grep -q "Up"; then
             webhook_health="ok"
         fi
+        local nginx_cid
+        nginx_cid="$(docker compose ps -q nginx 2>/dev/null || true)"
+        if [ -n "$nginx_cid" ]; then
+            local nginx_ports
+            nginx_ports="$(docker inspect "$nginx_cid" --format '{{range $p, $conf := .NetworkSettings.Ports}}{{if $conf}}{{$p}} {{end}}{{end}}' 2>/dev/null || true)"
+            if [[ "$nginx_ports" == *"80/tcp"* ]] && [[ "$nginx_ports" == *"443/tcp"* ]]; then
+                nginx_health="ok"
+            else
+                nginx_health="ports_unmapped"
+            fi
+        fi
     fi
 
     local disk_used_pct="unknown"
@@ -252,16 +264,26 @@ cmd_status() {
         mem_used_pct="$(free | awk '/Mem:/ {print int($3/$2 * 100)}')"
     fi
 
+    local overall_status="online"
+    if [ "$synapse_health" != "ok" ] || [ "$postgres_health" != "ok" ] || [ "$nginx_health" != "ok" ]; then
+        overall_status="degraded"
+    fi
+
     if [ "$format" = "json" ]; then
         local services_json="[]"
         if command -v docker >/dev/null 2>&1; then
-            services_json="$(docker compose ps --format json 2>/dev/null || echo "[]")"
+            if command -v jq >/dev/null 2>&1; then
+                services_json="$(docker compose ps --format json 2>/dev/null | jq -c -s '.' 2>/dev/null || echo "[]")"
+            else
+                services_json="$(docker compose ps --format json 2>/dev/null | paste -sd, - | sed 's/^/[/' | sed 's/$/]/' || echo "[]")"
+            fi
         fi
 
         cat <<EOF
 {
-  "status": "online",
+  "status": "$overall_status",
   "health": {
+    "nginx": "$nginx_health",
     "synapse": "$synapse_health",
     "mas": "$mas_health",
     "rageshake_webhook": "$webhook_health",
@@ -276,6 +298,7 @@ cmd_status() {
 EOF
     else
         log_info "=== Matrix Service Status ==="
+        echo "Nginx (80/443):           $nginx_health"
         echo "Synapse (8008):           $synapse_health"
         echo "MAS (8090):               $mas_health"
         echo "Rageshake Webhook (8088): $webhook_health"
