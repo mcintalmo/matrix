@@ -137,9 +137,16 @@ password_config:
 
 enable_registration: false
 
+# ── Room Directory & Discovery ────────────────────────────────────────────────
+allow_public_rooms_without_auth: true
+allow_public_rooms_over_federation: false
+room_list_publication_rules:
+  - action: allow
+
 # ── Auto-Join Rooms (Discord Emulation) ───────────────────────────────────────
 auto_join_rooms:
-  - "#WelcomeMat:${DOMAIN}" # (Optional: Update this string to your exact Alias if it differs)
+  - "#WelcomeMat:${DOMAIN}"
+  - "#space:${DOMAIN}"
 
 # ── Email Notifications ───────────────────────────────────────────────────────
 email:
